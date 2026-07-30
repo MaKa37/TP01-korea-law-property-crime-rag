@@ -218,6 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ETC
-Json_Files/*.json
-Json_Files/sample/*.json
-Save_Files/*.json
+*.json
+Json_Files/
+Save_Files/
+chunks_out/
