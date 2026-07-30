@@ -219,4 +219,5 @@ __marimo__/
 
 # ETC
 Json_Files/*.json
-Json_Files/Save/*.json
+Json_Files/sample/*.json
+Save_Files/*.json
