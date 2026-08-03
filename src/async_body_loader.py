@@ -25,8 +25,6 @@ import aiohttp
 from aiohttp import ClientTimeout
 from dotenv import load_dotenv
 
-__version__ = "3.1.0"
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s",
@@ -41,7 +39,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.law.go.kr/DRF/lawService.do"
 REQUEST_TIMEOUT_SECONDS = 60  # 본문 데이터는 크기가 크므로 타임아웃을 넉넉히 줍니다.
 MAX_CONCURRENT_REQUESTS = 15  # 본문 호출은 서버 부하가 커서 동시 요청 수를 약간 낮추는 것을 권장합니다.
-MAX_RETRIES = 3
+MAX_RETRIES = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "raw"
@@ -256,32 +254,40 @@ async def run_pipeline() -> None:
         logger.error("환경변수 'LAW_OPEN_API_KEY'가 설정되어 있지 않습니다.")
         raise SystemExit(1)
 
-    # ⚠️ 중요: 각 Target에 맞게 id_field와 param_key를 맞춰주어야 합니다.
+# ⚠️ 중요: 각 Target에 맞게 id_field와 param_key를 맞춰주어야 합니다.
     target_dbs: list[DetailTargetSpec] = [
-        # {
-        #     "db_name": "DB01", 
-        #     "target": "law", 
-        #     "description": "법령", 
-        #     "format": ResponseFormat.JSON, 
-        #     "id_field": "법령일련번호", # 목록 API JSON 응답 내의 키 값
-        #     "param_key": "MST"         # 상세 API 호출 시 사용할 파라미터 이름 (법제처는 법령 상세조회시 MST 사용)
-        # },
+        {
+            "db_name": "DB01", 
+            "target": "law", 
+            "description": "법령", 
+            "format": ResponseFormat.JSON, 
+            "id_field": "법령일련번호",      # 목록 API JSON 응답 내 식별자 키
+            "param_key": "MST"              # 법령 본문 호출용 링크 파라미터
+        },
+        {
+            "db_name": "DB03", 
+            "target": "expc", 
+            "description": "법령해석례", 
+            "format": ResponseFormat.JSON, 
+            "id_field": "법령해석례일련번호", # 기존 안건번호에서 실제 식별자로 수정
+            "param_key": "ID"               # 해석례 본문 호출용 링크 파라미터
+        },
         {
             "db_name": "DB10", 
             "target": "lstrm", 
             "description": "법령용어", 
             "format": ResponseFormat.JSON, 
-            "id_field": "법령용어ID", 
-            "param_key": "ID"
-        } #,
-        # {
-        #     "db_name": "DB19", 
-        #     "target": "expc", 
-        #     "description": "법령해석례", 
-        #     "format": ResponseFormat.JSON, 
-        #     "id_field": "안건번호", 
-        #     "param_key": "ID"
-        # },
+            "id_field": "법령용어ID",         # 기존 용어일련번호에서 실제 식별자로 수정
+            "param_key": "trmSeqs"          # 법령용어 본문 호출용 링크 파라미터
+        },
+        {
+            "db_name": "DB19", 
+            "target": "prec", 
+            "description": "법원 판례", 
+            "format": ResponseFormat.JSON, 
+            "id_field": "판례일련번호",       # 판례 목록 API JSON 응답 내 식별자 키
+            "param_key": "ID"               # 판례 본문 호출용 링크 파라미터
+        },
     ]
 
     timeout = ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)

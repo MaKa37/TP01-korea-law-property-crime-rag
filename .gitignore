@@ -219,6 +219,7 @@ __marimo__/
 
 # ETC
 *.json
+data/
 Json_Files/
 Save_Files/
 chunks_out/

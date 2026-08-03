@@ -31,8 +31,6 @@ import aiohttp
 from aiohttp import ClientTimeout
 from dotenv import load_dotenv
 
-__version__ = "3.0.0"
-
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -47,7 +45,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.law.go.kr/DRF/lawSearch.do"
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_CONCURRENT_REQUESTS = 20  # 동시 요청 수 제한
-MAX_RETRIES = 3               # API 호출 실패 시 최대 재시도 횟수
+MAX_RETRIES = 1               # API 호출 실패 시 최대 재시도 횟수
 DISPLAY_COUNT = 100           # 페이지당 요청 건수 (법제처 API 권장 최대치)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -293,8 +291,9 @@ async def run_pipeline() -> None:
 
     target_dbs: list[TargetSpec] = [
         {"db_name": "DB01", "target": "law", "description": "법령", "format": ResponseFormat.JSON},
+        {"db_name": "DB03", "target": "expc", "description": "법령해석례", "format": ResponseFormat.JSON},
         {"db_name": "DB10", "target": "lstrm", "description": "법령용어", "format": ResponseFormat.JSON},
-        {"db_name": "DB19", "target": "expc", "description": "법령해석례", "format": ResponseFormat.JSON},
+        {"db_name": "DB19", "target": "prec", "description": "법원 판례", "format": ResponseFormat.JSON},
     ]
 
     timeout = ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)

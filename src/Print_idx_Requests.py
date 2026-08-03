@@ -277,8 +277,9 @@ def main() -> None:
     # 테스트 대상 DB 메타데이터 정의
     target_dbs: list[TargetSpec] = [
         {"db_name": "DB01", "target": "law", "description": "법령", "format": ResponseFormat.JSON},
+        {"db_name": "DB03", "target": "expc", "description": "법령해석례", "format": ResponseFormat.JSON},
         {"db_name": "DB10", "target": "lstrm", "description": "법령용어", "format": ResponseFormat.JSON},
-        {"db_name": "DB19", "target": "expc", "description": "법령해석례", "format": ResponseFormat.JSON},
+        {"db_name": "DB19", "target": "prec", "description": "법원 판례", "format": ResponseFormat.JSON},
     ]
 
     for spec in target_dbs:
