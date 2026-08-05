@@ -64,7 +64,7 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nvidia/nv-embedqa-e5-v5")
 EXPECTED_EMBEDDING_DIM = 1024
 COPY_BATCH_SIZE = int(os.getenv("COPY_BATCH_SIZE", "20000"))
 API_BATCH_SIZE = 50
-MAX_API_WORKERS = 32  # [최적화 1] 동시 API 요청 수 8 -> 32로 확대
+MAX_API_WORKERS = 4 # 분당 요청 수 제한(40회)
 
 
 class NVIDIAEmbeddingClient:
