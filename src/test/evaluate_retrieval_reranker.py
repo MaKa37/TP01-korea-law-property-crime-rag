@@ -299,3 +299,41 @@ def run_evaluation(
 
 if __name__ == "__main__":
     run_evaluation(eval_filepath=DEFAULT_EVAL_DATASET_PATH, top_k=5)
+
+r""" 평가 결과:
+$ python src/test/evaluate_retrieval.py 
+===========================================================================
+🚀 [Retrieval Quality Evaluation - Advanced Two-Stage Phase]
+ ├─ Target Model    : nvidia/nemotron-3-embed-1b
+ ├─ Reranker Model  : nvidia/rerank-qa-mistral-4b
+ ├─ Total Test Size : 6 Queries
+ └─ Metric Target   : Hit Rate@5, MRR@5
+===========================================================================
+
+[01/06] Q1. ❌ MISS | MRR: 0.00 | Latency: 6118.9ms | 질의: 10ㆍ27법난 피해자의 명예회복 등에 관한 법률상 피해자의 정의와 심의위원회의 설치 목적
+    ├─ 검색된 Top-5 IDs : ['law_010719_art_0004001', 'law_010831_art_0007001', 'law_010831_art_0008001', 'law_010831_art_0004001', 'law_010831_art_0006021']
+    └─ 정답(Ground Truth) IDs : ['law_010719_art_0001001', 'law_010719_art_0002001', 'law_010719_art_0003001']
+[02/06] Q2. ✅ HIT  | MRR: 1.00 | Latency: 4655.2ms | 질의: 10ㆍ27법난 부상자에 대한 의료지원금 지급 대상 기준 및 부정한 수령 시 환수 절차
+    ├─ 검색된 Top-5 IDs : ['law_010719_art_0005001', 'law_010719_art_0006001', 'law_009634_art_0012001', 'law_012564_art_0016001', 'law_010540_art_0011001']
+    └─ 정답(Ground Truth) IDs : ['law_010719_art_0005001', 'law_010719_art_0006001']
+[03/06] Q3. ✅ HIT  | MRR: 0.50 | Latency: 2446.9ms | 질의: 수입식품안전관리 특별법상 준수사항 위반 시 벌칙이 적용되는 영업자에 법인의 종업원이 포함되는지 여부
+    ├─ 검색된 Top-5 IDs : ['prec_622249_head_2', 'prec_622249_head_1', 'prec_622249_body_1', 'prec_622249_body_2', 'prec_617159_head']
+    └─ 정답(Ground Truth) IDs : ['prec_622249_head_1', 'prec_622249_body_1']
+[04/06] Q4. ✅ HIT  | MRR: 1.00 | Latency: 7615.1ms | 질의: 수입식품법 양벌규정에 따라 영업자가 아니면서 해당 업무를 실제로 집행하는 자를 처벌하기 위한 요건
+    ├─ 검색된 Top-5 IDs : ['prec_622249_head_2', 'prec_622249_head_1', 'prec_622249_body_2', 'prec_617159_head', 'prec_78726_body_3']
+    └─ 정답(Ground Truth) IDs : ['prec_622249_head_2', 'prec_622249_body_2']
+[05/06] Q5. ✅ HIT  | MRR: 0.33 | Latency: 1345.3ms | 질의: 1959년 이전 퇴직 군인의 퇴직급여금 재직기간 산정 시 현역병 복무연한 공제와 전투근무기간 3배 가산의 순서
+    ├─ 검색된 Top-5 IDs : ['expc_313107_reasoning_3', 'expc_313107_reasoning_2', 'expc_313107_question', 'expc_313032_reasoning_3', 'expc_313032_reasoning_2']
+    └─ 정답(Ground Truth) IDs : ['expc_313107_conclusion', 'expc_313107_question', 'expc_313107_reasoning_1']
+[06/06] Q6. ✅ HIT  | MRR: 0.50 | Latency: 1342.2ms | 질의: 항공교통업무기준상 계기비행 기상상태(IMC)의 정의
+    ├─ 검색된 Top-5 IDs : ['lstrm_3686259', 'lstrm_3945293', 'lstrm_1517210', 'lstrm_13974', 'lstrm_5512443']
+    └─ 정답(Ground Truth) IDs : ['lstrm_3945293']
+
+===========================================================================
+📊 [Final Advanced Evaluation Summary]
+ ├─ Total Processed : 6 Queries
+ ├─ Hit Rate@5      : 83.33% (5/6)
+ └─ MRR@5           : 0.5556
+===========================================================================
+(venv) 
+"""
