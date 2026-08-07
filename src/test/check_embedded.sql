@@ -53,7 +53,7 @@ UNION ALL
 SELECT '6. 백업 대비 실제로 값이 바뀐 행 수 (재임베딩 대상 건수와 비슷해야 함)',
        COUNT(*)::text
 FROM legal_chunks lc
-JOIN <BACKUP_TABLE> b ON lc.chunk_id = b.chunk_id
+JOIN legal_chunks_embedding_backup_20260806_081628 b ON lc.chunk_id = b.chunk_id
 WHERE lc.embedding IS DISTINCT FROM b.embedding;
 
 
