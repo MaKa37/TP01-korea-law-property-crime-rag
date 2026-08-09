@@ -78,14 +78,6 @@ HYDE_TEMPERATURE: float = float(os.getenv("HYDE_TEMPERATURE", "0"))
 # RRF 결합 파라미터 (기존 하드코딩 60 -> 환경변수로 조정 가능)
 RRF_K: int = int(os.getenv("RRF_K", "60"))
 
-# [NEW] prec head(요약) 청크 가중치 배수
-# "판시사항이 뭐야?" 류 질의에서 정답은 보통 head(요약) 청크인데, body(본문) 청크의
-# 법리 인용 문구(예: 여러 사건이 동일 상급심 판례를 그대로 인용)가 더 높은 유사도로
-# 잡히는 경우가 있어(HARD_PREC_04 등) 이를 완화하기 위한 가중치입니다.
-# 1.15배로는 효과가 없어 1.8배로 상향했습니다. chunk_id에 "_head" 패턴은 prec에만
-# 존재하므로 다른 doc_type에는 영향 없습니다.
-PREC_HEAD_BOOST: float = float(os.getenv("PREC_HEAD_BOOST", "1.8"))
-
 # [NEW] prec 하급심 빈 판시사항/판결요지 청크 필터링 임계값
 # content가 "[판결요지]"로 끝나면서(=판결요지 없음) 길이가 이 값 미만이면
 # 판시사항까지 비어있는 "제목 수준" 노이즈 청크로 간주해 검색 후보에서 제외합니다.
@@ -387,9 +379,7 @@ def execute_advanced_search(
         ),
         combined AS (
             SELECT COALESCE(v.chunk_id, t.chunk_id) AS chunk_id,
-                   (COALESCE(1.0 / ({RRF_K} + v.rank), 0.0) + COALESCE(1.0 / ({RRF_K} + t.rank), 0.0))
-                   * CASE WHEN COALESCE(v.chunk_id, t.chunk_id) ~ '_head' THEN {PREC_HEAD_BOOST} ELSE 1.0 END
-                   AS rrf_score
+                   (COALESCE(1.0 / ({RRF_K} + v.rank), 0.0) + COALESCE(1.0 / ({RRF_K} + t.rank), 0.0)) AS rrf_score
             FROM vector_search v
             FULL OUTER JOIN text_search t ON v.chunk_id = t.chunk_id
             ORDER BY rrf_score DESC
