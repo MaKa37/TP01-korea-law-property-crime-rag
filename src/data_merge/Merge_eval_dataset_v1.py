@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_EVAL_DATASET_PATH = PROJECT_DIR / "data" / "dataset" / "eval_dataset.json"
 EVAL_DATASET_PATH = PROJECT_DIR / "data" / "dataset"
 
