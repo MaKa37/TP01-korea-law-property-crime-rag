@@ -1,0 +1,10 @@
+# --- 기존 RAG 파이프라인 ---
+requests
+psycopg2-binary
+python-dotenv
+urllib3
+
+# --- API 서비스 계층 (3순위) ---
+fastapi
+uvicorn[standard]
+pydantic

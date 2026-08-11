@@ -1,6 +1,6 @@
 """RAG 파이프라인 오케스트레이터."""
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -10,8 +10,8 @@ from core.config import RAGConfig
 from core.logging import get_logger
 from db.pool import create_db_pool
 from rag.embedding import get_embedding
-from rag.generator import build_fallback_answer, generate_response
-from rag.reranker import rerank_candidates
+from rag.generator import build_fallback_answer, generate_response, generate_response_stream
+from rag.reranker import rerank_candidates, select_diverse_top_k
 from rag.retrieval import execute_hybrid_search, execute_keyword_search
 
 
@@ -69,8 +69,9 @@ class LegalRAGBot:
             candidates = execute_keyword_search(self.db_pool, self.config, user_query)
             self.logger.info(f"1차 키워드 검색 완료: {len(candidates)}건 후보 도출")
 
-        top_docs = rerank_candidates(self.session, self.config, self.logger, user_query, candidates)
-        self.logger.info(f"2차 Reranking 완료: 상위 {len(top_docs)}건 확정")
+        candidate_pool = rerank_candidates(self.session, self.config, self.logger, user_query, candidates)
+        top_docs = select_diverse_top_k(candidate_pool, self.config.top_k, self.config.diversity_similarity_threshold)
+        self.logger.info(f"2차 Reranking+다양성 필터 완료: 후보 {len(candidate_pool)}건 중 상위 {len(top_docs)}건 확정")
         return top_docs
 
     def ask(self, user_query: str) -> Dict[str, Any]:
@@ -120,6 +121,63 @@ class LegalRAGBot:
                 "status": "error",
                 "error_message": str(e)
             }
+
+    def ask_stream(self, user_query: str) -> Iterator[Dict[str, Any]]:
+        """API 서비스 계층(SSE)용: 각 단계를 이벤트로 yield한다.
+
+        이벤트 종류:
+          - {"type": "sources", "documents": [...]}          검색 완료, 생성 시작 전
+          - {"type": "token", "content": "..."}                생성 토큰 (여러 번)
+          - {"type": "done", "latency_sec": ..., "llm_available": bool}
+          - {"type": "no_results", "message": "..."}
+          - {"type": "error", "message": "..."}
+
+        이 메서드 자체는 동기(sync) 제너레이터다. FastAPI 라우트에서
+        StreamingResponse에 그대로 넘기면 Starlette가 스레드풀에서
+        실행해주므로, DB/HTTP 블로킹 호출이 이벤트 루프를 막지 않는다.
+        """
+        start_time = time.time()
+        self.logger.info(f"[stream] 사용자 질의 접수: '{user_query}'")
+
+        try:
+            top_docs = self.retrieve(user_query)
+        except Exception as e:
+            self.logger.error(f"검색 중 오류 발생: {e}", exc_info=True)
+            yield {"type": "error", "message": str(e)}
+            return
+
+        if not top_docs:
+            self.logger.warning("검색된 참고 자료가 없어 답변 생성을 건너뜁니다.")
+            yield {
+                "type": "no_results",
+                "message": (
+                    "죄송합니다. 질문과 관련된 법령이나 판례를 찾지 못했습니다. "
+                    "질문을 조금 더 구체적으로 입력하시거나 다른 키워드로 다시 시도해 주세요."
+                )
+            }
+            return
+
+        yield {
+            "type": "sources",
+            "documents": [
+                {"title": d["title"], "doc_type": d.get("doc_type"), "rerank_score": d.get("rerank_score")}
+                for d in top_docs
+            ]
+        }
+
+        llm_available = True
+        try:
+            for token in generate_response_stream(self.session, self.config, self.logger, user_query, top_docs):
+                yield {"type": "token", "content": token}
+        except Exception as e:
+            self.logger.error(f"🚨 스트리밍 답변 생성 실패, 검색된 원문 자료로 대체합니다: {e}")
+            fallback = build_fallback_answer(top_docs)
+            yield {"type": "token", "content": fallback}
+            llm_available = False
+
+        latency = time.time() - start_time
+        self.logger.info(f"[stream] 답변 생성 완료 (총 소요 시간: {latency:.2f}초, LLM 사용: {llm_available})")
+        yield {"type": "done", "latency_sec": latency, "llm_available": llm_available}
 
     def close(self):
         self.session.close()

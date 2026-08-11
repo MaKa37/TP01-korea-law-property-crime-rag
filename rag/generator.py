@@ -1,7 +1,7 @@
 """LLM 답변 생성 (SSE 스트리밍)."""
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
@@ -9,19 +9,22 @@ from core.config import RAGConfig
 from rag.prompts import SYSTEM_PROMPT
 
 
-def generate_response(
+def _stream_chat_tokens(
     session: requests.Session,
     config: RAGConfig,
     logger: logging.Logger,
     query: str,
     retrieved_docs: List[Dict[str, Any]]
-) -> str:
-    """검색된 문서를 바탕으로 LLM을 호출하여 최종 답변 생성. 실패 시 예외를 발생시킨다.
+) -> Iterator[str]:
+    """NVIDIA Chat Completion API를 SSE로 호출해 토큰을 하나씩 yield하는 저수준 제너레이터.
 
     550B급 대형 모델은 전체 응답 생성에 수십 초~수 분이 걸릴 수 있다.
     stream=True로 SSE를 받아 "토큰이 끊기지 않는 한" 타임아웃이 나지
     않도록 처리한다. timeout=(connect, read)에서 read는 전체 생성 시간이
     아니라 "다음 청크가 올 때까지의 대기 시간"이다.
+
+    CLI(blocking 수집+콘솔 출력)와 API(그대로 클라이언트로 릴레이) 양쪽에서
+    이 제너레이터 하나를 공유한다. 예외는 호출부에서 처리하도록 그대로 전파한다.
     """
     context_str = "\n\n".join(
         f"[문서 {i+1}] (출처: {doc['title']})\n{doc['content']}"
@@ -48,12 +51,12 @@ def generate_response(
             stream=True
         )
         resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"🚨 NVIDIA Chat Completion API 호출 실패: {e}")
+        raise RuntimeError(f"답변 생성 LLM 호출에 실패했습니다: {e}") from e
 
-        collected: List[str] = []
-        finish_reason: Optional[str] = None
-        if config.stream_print:
-            print("\n🤖 [AI 어시스턴트 답변] (실시간 생성 중)\n", flush=True)
-
+    finish_reason: Optional[str] = None
+    try:
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line or not raw_line.startswith("data:"):
                 continue
@@ -70,33 +73,60 @@ def generate_response(
             delta = choices[0].get("delta", {})
             token = delta.get("content")
             if token:
-                collected.append(token)
-                if config.stream_print:
-                    print(token, end="", flush=True)
+                yield token
             reason = choices[0].get("finish_reason")
             if reason:
                 finish_reason = reason
-
-        if config.stream_print:
-            print()
-
-        answer = "".join(collected).strip()
-        if not answer:
-            raise RuntimeError("스트리밍 응답에서 콘텐츠를 받지 못했습니다.")
-
-        if finish_reason == "length":
-            logger.warning(
-                f"⚠️ max_tokens({config.max_tokens})에 도달하여 답변이 중간에 "
-                "잘렸을 수 있습니다. MAX_TOKENS 값을 늘리는 것을 고려하세요."
-            )
-
-        return answer
     except requests.exceptions.RequestException as e:
-        logger.error(f"🚨 NVIDIA Chat Completion API 호출 실패: {e}")
-        raise RuntimeError(f"답변 생성 LLM 호출에 실패했습니다: {e}") from e
+        logger.error(f"🚨 스트리밍 중 연결 오류: {e}")
+        raise RuntimeError(f"답변 생성 스트리밍 중 연결이 끊겼습니다: {e}") from e
+
+    if finish_reason == "length":
+        logger.warning(
+            f"⚠️ max_tokens({config.max_tokens})에 도달하여 답변이 중간에 "
+            "잘렸을 수 있습니다. MAX_TOKENS 값을 늘리는 것을 고려하세요."
+        )
+
+
+def generate_response_stream(
+    session: requests.Session,
+    config: RAGConfig,
+    logger: logging.Logger,
+    query: str,
+    retrieved_docs: List[Dict[str, Any]]
+) -> Iterator[str]:
+    """API 서비스 계층용: 토큰을 그대로 yield한다. 호출부(FastAPI 라우트)가 SSE로 감싼다."""
+    yield from _stream_chat_tokens(session, config, logger, query, retrieved_docs)
+
+
+def generate_response(
+    session: requests.Session,
+    config: RAGConfig,
+    logger: logging.Logger,
+    query: str,
+    retrieved_docs: List[Dict[str, Any]]
+) -> str:
+    """CLI/평가 하네스용: 토큰을 전부 모아 완성된 문자열로 반환. 실패 시 예외를 발생시킨다."""
+    collected: List[str] = []
+    if config.stream_print:
+        print("\n🤖 [AI 어시스턴트 답변] (실시간 생성 중)\n", flush=True)
+
+    try:
+        for token in _stream_chat_tokens(session, config, logger, query, retrieved_docs):
+            collected.append(token)
+            if config.stream_print:
+                print(token, end="", flush=True)
     except (KeyError, IndexError, ValueError) as e:
         logger.error(f"🚨 LLM 응답 파싱 실패: {e}")
         raise RuntimeError(f"LLM 응답 형식이 올바르지 않습니다: {e}") from e
+    finally:
+        if config.stream_print:
+            print()
+
+    answer = "".join(collected).strip()
+    if not answer:
+        raise RuntimeError("스트리밍 응답에서 콘텐츠를 받지 못했습니다.")
+    return answer
 
 
 def build_fallback_answer(retrieved_docs: List[Dict[str, Any]]) -> str:

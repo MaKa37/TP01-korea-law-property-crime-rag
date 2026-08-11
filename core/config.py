@@ -48,3 +48,11 @@ class RAGConfig:
     # Generation Settings
     max_tokens: int = int(os.getenv("MAX_TOKENS", "4096"))
     stream_print: bool = os.getenv("STREAM_PRINT", "true").lower() == "true"
+
+    # Orchestration Settings (라우팅/질의 재작성용 - 가볍고 빠른 모델 사용)
+    utility_model: str = os.getenv("UTILITY_MODEL", "meta/llama-3.1-8b-instruct")
+    session_max_turns: int = int(os.getenv("SESSION_MAX_TURNS", "10"))
+
+    # Diversity Settings (5순위 - 거의 동일한 내용의 문서가 top_k를 도배하는 것 방지)
+    rerank_pool_multiplier: int = int(os.getenv("RERANK_POOL_MULTIPLIER", "3"))
+    diversity_similarity_threshold: float = float(os.getenv("DIVERSITY_SIMILARITY_THRESHOLD", "0.85"))
