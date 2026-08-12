@@ -29,6 +29,8 @@ import argparse
 import json
 import os
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -44,6 +46,27 @@ GOLDEN_SET_PATH = Path(__file__).resolve().parent / "golden_set.jsonl"
 # JUDGE_MODEL을 명시적으로 지정하지 않으면, config.chat_model(최종 답변용
 # 대형 모델)을 그대로 판정에도 쓴다. main()에서 실제 값으로 해석된다.
 JUDGE_MODEL_OVERRIDE = os.getenv("JUDGE_MODEL")
+
+# 판정 전용 설정. 배치 작업(실시간 응답 아님)이므로 속도보다 안정성을 우선한다.
+#   - JUDGE_CALL_DELAY_SEC: 판정 호출 사이 대기 시간. 550B급 모델을 후보
+#     개수만큼(예: 12번) 연달아 두들기면 NVIDIA API가 503(과부하)을 자주
+#     반환한다. 텀을 줘서 요청 빈도를 낮춘다.
+#   - JUDGE_TIMEOUT_SEC: 판정 1회당 read timeout. 대화형 채팅(chat_timeout,
+#     기본 60초)과 달리 배치 작업이라 훨씬 오래 기다려도 무방하다. 550B
+#     모델의 비스트리밍 호출은 전체 응답이 완성될 때까지 한 번에 기다려야
+#     하므로 여유가 필요하다.
+JUDGE_CALL_DELAY_SEC = float(os.getenv("JUDGE_CALL_DELAY_SEC", "1.5"))
+JUDGE_TIMEOUT_SEC = int(os.getenv("JUDGE_TIMEOUT_SEC", "180"))
+# ⚠️ nemotron-3-ultra-550b-a55b 같은 추론(reasoning) 모델은 최종 답변을
+# 내놓기 전에 내부적으로 "생각하는" 토큰을 먼저 소비한다. max_tokens가
+# 작으면(예: 250) 생각만 하다가 예산을 다 써버려 실제 답변(JSON)은 한
+# 글자도 못 내놓고 끝날 수 있다. 짧은 JSON 하나 받자고 이렇게 크게
+# 잡는 게 낭비처럼 보이지만, 추론 모델에게는 "생각할 공간"이 필요하다.
+JUDGE_MAX_TOKENS = int(os.getenv("JUDGE_MAX_TOKENS", "1500"))
+# 후보 문서 판정을 동시에 몇 개까지 병렬로 쏠지. 순차 처리(1개씩)가 너무
+# 느려서 도입했지만, 너무 크게 잡으면 과부하(503)가 재발할 수 있으니
+# 보수적으로 시작해서 필요하면 올릴 것.
+JUDGE_CONCURRENCY = int(os.getenv("JUDGE_CONCURRENCY", "4"))
 
 JUDGE_SYSTEM_PROMPT = """당신은 한국 법률 정보 검색 시스템(RAG)의 엄격한 평가자입니다.
 [사용자 질문]에 대해 [후보 문서]가 실질적으로 관련된 근거자료로 사용될 수 있는지 판단하십시오.
@@ -67,6 +90,19 @@ confidence(확신도) 기준 — 반드시 솔직하게 판단할 것:
 """
 
 _VALID_CONFIDENCE = ("high", "medium", "low")
+
+
+def _all_judgments_errored(item: Dict[str, Any]) -> bool:
+    """자동 판정이 (거의) 전부 실패했는지 확인.
+
+    503/빈 응답 등으로 후보 문서 전부에 대한 판정이 실패한 채로 reviewed="auto"가
+    저장된 경우, --audit으로 봐도 "판정 실패"만 잔뜩 보이고 실제로 검토할
+    내용이 없다. 이런 항목은 감사 대상이 아니라 재시도 대상이다.
+    """
+    details = item.get("auto_label_details", [])
+    if not details:
+        return False
+    return all(d.get("error") for d in details)
 
 
 def load_all(path: Path) -> List[Dict[str, Any]]:
@@ -102,7 +138,7 @@ def llm_judge_relevance(bot: LegalRAGBot, judge_model: str, query: str, doc: Dic
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.0,
-        "max_tokens": 250,
+        "max_tokens": JUDGE_MAX_TOKENS,
         "stream": False,
     }
 
@@ -110,13 +146,30 @@ def llm_judge_relevance(bot: LegalRAGBot, judge_model: str, query: str, doc: Dic
         resp = bot.session.post(
             bot.config.chat_url,
             json=payload,
-            timeout=(bot.config.connect_timeout, bot.config.chat_timeout),
+            timeout=(bot.config.connect_timeout, JUDGE_TIMEOUT_SEC),
         )
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
+        message = resp.json()["choices"][0]["message"]
+        text = (message.get("content") or "").strip()
         text = text.strip("`").strip()
         if text.lower().startswith("json"):
             text = text[4:].strip()
+
+        if not text:
+            choice = resp.json()["choices"][0]
+            finish_reason = choice.get("finish_reason")
+            # nemotron-3-ultra 같은 추론(reasoning) 모델은 최종 답변 전에
+            # "생각하는" 토큰을 먼저 쓰고, 그 내용이 content가 아니라
+            # reasoning_content(또는 reasoning) 필드에 별도로 담기기도 한다.
+            # finish_reason="length"이면서 이 필드에 내용이 있다면,
+            # max_tokens가 부족해서 생각만 하다 끝난 것이다.
+            reasoning_len = len(message.get("reasoning_content") or message.get("reasoning") or "")
+            reason_detail = f"finish_reason={finish_reason}, reasoning_len={reasoning_len}"
+            return {
+                "relevant": False, "confidence": "low",
+                "reason": f"빈 응답 ({reason_detail})", "error": True
+            }
+
         parsed = json.loads(text)
 
         confidence = parsed.get("confidence")
@@ -150,22 +203,30 @@ def auto_review_query(
     relevant_ids: List[str] = []
     needs_review = False
 
-    for doc in docs:
+    def _judge_one(doc: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         case_id = extract_case_id(doc["title"])
         judged = llm_judge_relevance(bot, judge_model, query, doc)
-        details.append({"case_id": case_id, **judged})
+        if JUDGE_CALL_DELAY_SEC > 0:
+            time.sleep(JUDGE_CALL_DELAY_SEC)  # 워커 하나당 완급 조절 (완전 무제한 동시 요청 방지)
+        return case_id, judged
 
-        if judged.get("error"):
-            needs_review = True
+    # executor.map은 입력 순서를 그대로 유지해서 결과를 돌려주므로,
+    # 동시에 실행되면서도 출력은 리랭크 점수 순서 그대로 유지된다.
+    with ThreadPoolExecutor(max_workers=JUDGE_CONCURRENCY) as executor:
+        for case_id, judged in executor.map(_judge_one, docs):
+            details.append({"case_id": case_id, **judged})
 
-        if judged["relevant"]:
-            relevant_ids.append(case_id)
-            if judged.get("confidence") != "high":
+            if judged.get("error"):
                 needs_review = True
 
-        mark = "✅" if judged["relevant"] else "❌"
-        conf = judged.get("confidence", "?")
-        print(f"  {mark} [{conf:6s}] ({case_id}) {judged['reason']}")
+            if judged["relevant"]:
+                relevant_ids.append(case_id)
+                if judged.get("confidence") != "high":
+                    needs_review = True
+
+            mark = "✅" if judged["relevant"] else "❌"
+            conf = judged.get("confidence", "?")
+            print(f"  {mark} [{conf:6s}] ({case_id}) {judged['reason']}")
 
     if not relevant_ids:
         needs_review = True  # 0건도 사람이 한 번은 확인하는 게 안전
@@ -242,9 +303,27 @@ def main() -> None:
     parser.add_argument("--review-pending", action="store_true", help="완전 수동으로 검토 (자동 판정 없이)")
     parser.add_argument("--add", type=str, default=None, help="새 질의를 추가")
     parser.add_argument("--candidates", type=int, default=12, help="검토용 후보 개수 (기본 12)")
+    parser.add_argument(
+        "--reset-failed", action="store_true",
+        help="자동 판정이 전부 실패(error)한 질의를 재시도 대기 상태로 되돌림"
+    )
     args = parser.parse_args()
 
     items = load_all(GOLDEN_SET_PATH)
+
+    if args.reset_failed:
+        reset_count = 0
+        for item in items:
+            if item.get("reviewed") == "auto" and _all_judgments_errored(item):
+                item["reviewed"] = False
+                item["relevant_case_ids"] = []
+                item.pop("auto_label_details", None)
+                item["notes"] = "판정 전부 실패 -> --reset-failed로 재시도 대기 상태로 되돌림"
+                reset_count += 1
+        save_all(GOLDEN_SET_PATH, items)
+        print(f"🔄 {reset_count}건을 재시도 대기 상태로 되돌렸습니다. 다시 --auto를 실행하세요.")
+        if not any([args.auto, args.audit, args.review_pending, args.add]):
+            return
 
     if args.add:
         next_num = len(items) + 1

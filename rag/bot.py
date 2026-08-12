@@ -44,7 +44,18 @@ class LegalRAGBot:
 
     def _setup_session(self) -> requests.Session:
         session = requests.Session()
-        retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
+        # ⚠️ urllib3의 Retry는 기본적으로 POST를 재시도 대상에서 제외한다
+        # (allowed_methods 기본값이 GET/HEAD/OPTIONS 등 멱등 메서드만 포함).
+        # 이 프로젝트의 모든 API 호출(임베딩/리랭킹/생성/판정)이 POST라서,
+        # allowed_methods를 명시하지 않으면 status_forcelist가 있어도
+        # 재시도가 한 번도 발동하지 않는다. 550B급 모델은 부하 시 503을
+        # 자주 반환하므로 이 부분이 특히 중요하다.
+        retry = Retry(
+            total=4,
+            backoff_factor=1.0,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=frozenset(["GET", "HEAD", "OPTIONS", "POST"]),
+        )
         adapter = HTTPAdapter(max_retries=retry)
         session.mount("https://", adapter)
         session.headers.update({

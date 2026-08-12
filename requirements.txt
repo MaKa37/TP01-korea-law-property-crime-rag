@@ -8,3 +8,4 @@ urllib3
 fastapi
 uvicorn[standard]
 pydantic
+slowapi

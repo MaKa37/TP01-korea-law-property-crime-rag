@@ -2,10 +2,12 @@ import json
 import uuid
 from typing import Any, Dict, Iterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_orchestrator
+from app.auth import require_api_key
+from app.rate_limit import CHAT_RATE_LIMIT, limiter
 from app.schemas.chat import ChatRequest
 from orchestration.orchestrator import ChatOrchestrator
 
@@ -48,13 +50,25 @@ def _batch_token_events(events: Iterator[Dict[str, Any]], min_chars: int = _TOKE
 
 
 @router.post("/chat")
-async def chat(payload: ChatRequest, orchestrator: ChatOrchestrator = Depends(get_orchestrator)) -> StreamingResponse:
+@limiter.limit(CHAT_RATE_LIMIT)
+async def chat(
+    request: Request,
+    payload: ChatRequest,
+    orchestrator: ChatOrchestrator = Depends(get_orchestrator),
+    api_key: str = Depends(require_api_key),
+) -> StreamingResponse:
     """법률 질의에 대한 답변을 SSE로 스트리밍한다.
 
     ⚠️ 브라우저 네이티브 EventSource는 GET만 지원하므로, 클라이언트는
     fetch() + ReadableStream(또는 SSE 폴리필)으로 이 엔드포인트를 소비해야
     한다. ChatOrchestrator.ask_stream()이 동기 제너레이터이므로,
     StreamingResponse가 이를 스레드풀에서 실행해 이벤트 루프를 막지 않는다.
+
+    ⚠️ X-API-Key 헤더로 인증한다 (.env의 API_KEYS 미설정 시 인증 비활성화).
+    요청은 API 키(또는 미인증이면 IP) 기준으로 CHAT_RATE_LIMIT(기본
+    10/minute)로 제한된다. 다른 엔드포인트보다 훨씬 엄격한 이유는,
+    호출 한 번에 임베딩·리랭킹·생성(+라우팅·재작성)까지 유료 LLM API를
+    여러 번 태우기 때문이다. 인증 실패 시 401, 제한 초과 시 429가 반환된다.
 
     이벤트 타입: session / rewritten_query / sources / token / done / no_results / error
     token 이벤트는 모델 토큰을 그대로 보내지 않고 일정 글자 수 단위로
