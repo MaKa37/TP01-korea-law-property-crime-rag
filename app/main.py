@@ -17,7 +17,7 @@ from app.rate_limit import limiter
 from core.config import RAGConfig
 from core.logging import get_logger
 from orchestration.orchestrator import ChatOrchestrator
-from orchestration.session_store import InMemorySessionStore
+from orchestration.session_store import create_session_store
 from rag.bot import LegalRAGBot
 
 
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     # app.state에 보관하고 전체 요청이 공유한다.
     config = RAGConfig()
     bot = LegalRAGBot(config)
-    session_store = InMemorySessionStore(max_turns=config.session_max_turns)
+    session_store = create_session_store(config, bot.logger)
 
     app.state.bot = bot
     app.state.orchestrator = ChatOrchestrator(bot, session_store)

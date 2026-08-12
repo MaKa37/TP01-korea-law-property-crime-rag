@@ -43,7 +43,7 @@ class RAGConfig:
     connect_timeout: int = int(os.getenv("CONNECT_TIMEOUT", "10"))
     embed_timeout: int = int(os.getenv("EMBED_TIMEOUT", "15"))
     rerank_timeout: int = int(os.getenv("RERANK_TIMEOUT", "20"))
-    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "60"))
+    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "180"))
 
     # Generation Settings
     max_tokens: int = int(os.getenv("MAX_TOKENS", "4096"))
@@ -52,6 +52,18 @@ class RAGConfig:
     # Orchestration Settings (라우팅/질의 재작성용 - 가볍고 빠른 모델 사용)
     utility_model: str = os.getenv("UTILITY_MODEL", "meta/llama-3.1-8b-instruct")
     session_max_turns: int = int(os.getenv("SESSION_MAX_TURNS", "10"))
+
+    # Session Store Settings (P2 - 프로덕션 하드닝)
+    # "memory": 프로세스 메모리 (재시작 시 유실, 다중 워커 불가)
+    # "redis" : Redis 기반 (재시작에도 유지, 다중 워커/프로세스 간 공유 가능)
+    session_store_backend: str = os.getenv("SESSION_STORE_BACKEND", "memory")
+    redis_host: str = os.getenv("REDIS_HOST", "127.0.0.1")
+    redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+    redis_db: int = int(os.getenv("REDIS_DB", "0"))
+    redis_password: str = os.getenv("REDIS_PASSWORD", "")
+    # 세션 만료 시간(초). 기본 24시간 — 그 시간 동안 후속 질문이 없으면
+    # 대화 맥락을 잊어버린다 (Redis가 자동으로 키를 지워줌).
+    session_ttl_seconds: int = int(os.getenv("SESSION_TTL_SECONDS", str(24 * 60 * 60)))
 
     # Diversity Settings (5순위 - 거의 동일한 내용의 문서가 top_k를 도배하는 것 방지)
     rerank_pool_multiplier: int = int(os.getenv("RERANK_POOL_MULTIPLIER", "3"))
