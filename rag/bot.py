@@ -20,7 +20,16 @@ class LegalRAGBot:
         self.config = config
         self.logger = get_logger()
         self._validate_config()
-        self.session = self._setup_session()
+        # 임베딩/리랭킹은 응답이 빠르고(수 초) 실패해도 재시도 여러 번이
+        # 부담 없어서 관대하게(4회) 재시도한다.
+        self.session = self._setup_session(total=4, backoff_factor=1.0)
+        # ⚠️ 채팅 생성은 별도 세션을 쓴다. 대형 모델이 응답을 안 주는
+        # 상황에서 read timeout(60초)마다 재시도를 4번 반복하면 사용자가
+        # 5분 넘게 기다리게 된다(실제로 328초 걸린 사례 있음). 이미
+        # rag/bot.py의 ask()/ask_stream()에 애플리케이션 레벨 폴백
+        # (검색 원문 대체 답변)이 있으므로, 여기서는 빠르게 실패하고
+        # 그 폴백에 맡기는 게 사용자 경험상 낫다.
+        self.stream_session = self._setup_session(total=1, backoff_factor=0.5)
         self.db_pool = create_db_pool(config, self.logger)
 
     def __enter__(self) -> "LegalRAGBot":
@@ -42,7 +51,7 @@ class LegalRAGBot:
                 "반드시 .env로 별도 설정해주세요."
             )
 
-    def _setup_session(self) -> requests.Session:
+    def _setup_session(self, total: int = 4, backoff_factor: float = 1.0) -> requests.Session:
         session = requests.Session()
         # ⚠️ urllib3의 Retry는 기본적으로 POST를 재시도 대상에서 제외한다
         # (allowed_methods 기본값이 GET/HEAD/OPTIONS 등 멱등 메서드만 포함).
@@ -51,8 +60,8 @@ class LegalRAGBot:
         # 재시도가 한 번도 발동하지 않는다. 550B급 모델은 부하 시 503을
         # 자주 반환하므로 이 부분이 특히 중요하다.
         retry = Retry(
-            total=4,
-            backoff_factor=1.0,
+            total=total,
+            backoff_factor=backoff_factor,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=frozenset(["GET", "HEAD", "OPTIONS", "POST"]),
         )
@@ -108,7 +117,7 @@ class LegalRAGBot:
                 }
 
             try:
-                answer = generate_response(self.session, self.config, self.logger, user_query, top_docs)
+                answer = generate_response(self.stream_session, self.config, self.logger, user_query, top_docs)
                 llm_available = True
             except Exception as e:
                 self.logger.error(f"🚨 답변 생성 실패, 검색된 원문 자료로 대체합니다: {e}")
@@ -178,7 +187,7 @@ class LegalRAGBot:
 
         llm_available = True
         try:
-            for token in generate_response_stream(self.session, self.config, self.logger, user_query, top_docs):
+            for token in generate_response_stream(self.stream_session, self.config, self.logger, user_query, top_docs):
                 yield {"type": "token", "content": token}
         except Exception as e:
             self.logger.error(f"🚨 스트리밍 답변 생성 실패, 검색된 원문 자료로 대체합니다: {e}")
@@ -192,5 +201,6 @@ class LegalRAGBot:
 
     def close(self):
         self.session.close()
+        self.stream_session.close()
         self.db_pool.closeall()
         self.logger.info("데이터베이스 커넥션 및 세션 종료 완료")

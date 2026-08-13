@@ -46,7 +46,12 @@ class RAGConfig:
     chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "180"))
 
     # Generation Settings
-    max_tokens: int = int(os.getenv("MAX_TOKENS", "4096"))
+    # ⚠️ SYSTEM_PROMPT는 "관련 법령 해설 -> 유사 판례 요약 -> 피해자 조치 절차 ->
+    # 면책 조항"까지 4개 섹션을 요구하는 긴 구조라, 답변이 상세할수록
+    # max_tokens 한계에 걸려 면책 조항도 못 내놓고 잘릴 수 있다. 실제로
+    # nemotron-3-ultra-550b 모델 비교 테스트에서 5건 중 2건이 4096에서
+    # 잘렸다(면책 조항 누락 확인됨). 여유 있게 상향.
+    max_tokens: int = int(os.getenv("MAX_TOKENS", "8192"))
     stream_print: bool = os.getenv("STREAM_PRINT", "true").lower() == "true"
 
     # Orchestration Settings (라우팅/질의 재작성용 - 가볍고 빠른 모델 사용)

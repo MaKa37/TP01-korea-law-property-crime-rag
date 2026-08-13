@@ -3,7 +3,9 @@
 실행:
     uvicorn app.main:app --reload --port 8000
 """
+import os
 from contextlib import asynccontextmanager
+from typing import List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +23,22 @@ from orchestration.session_store import create_session_store
 from rag.bot import LegalRAGBot
 
 
+def _parse_cors_origins() -> List[str]:
+    """CORS_ALLOWED_ORIGINS(콤마 구분)를 파싱한다.
+
+    ⚠️ 미설정 시 빈 리스트를 반환한다 = 브라우저发 크로스 오리진 요청을
+    전부 차단하는 게 기본값이다("*" 전체 허용이 기본값이면 안 됨).
+    curl/requests 같은 비-브라우저 클라이언트는 CORS 자체의 영향을
+    받지 않으므로(브라우저가 강제하는 정책), 지금까지 해온 API 직접
+    호출 테스트는 이 설정과 무관하게 계속 동작한다.
+    """
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+CORS_ALLOWED_ORIGINS = _parse_cors_origins()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 요청마다 DB 풀/세션을 새로 만들지 않도록, 앱 시작 시 한 번만 생성해서
@@ -32,11 +50,21 @@ async def lifespan(app: FastAPI):
     app.state.bot = bot
     app.state.orchestrator = ChatOrchestrator(bot, session_store)
 
+    logger = get_logger()
+
     if not API_KEYS:
-        get_logger().warning(
+        logger.warning(
             "⚠️ API_KEYS가 설정되지 않아 인증이 비활성화된 상태입니다. "
             "로컬 개발 중에는 괜찮지만, 외부에 배포하기 전에는 반드시 "
             ".env에 API_KEYS를 설정하세요."
+        )
+
+    if not CORS_ALLOWED_ORIGINS:
+        logger.warning(
+            "⚠️ CORS_ALLOWED_ORIGINS가 설정되지 않아 브라우저 기반 크로스 "
+            "오리진 요청이 전부 차단됩니다. 프론트엔드 도메인이 정해지면 "
+            ".env에 CORS_ALLOWED_ORIGINS=https://your-frontend.com 형태로 "
+            "추가하세요. (curl/requests 등 비-브라우저 클라이언트는 영향 없음)"
         )
 
     yield
@@ -57,13 +85,14 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# ⚠️ 개발 편의를 위한 전체 허용 설정. 운영 배포 시 실제 프론트엔드
-# 도메인으로 allow_origins를 반드시 제한할 것.
+# CORS_ALLOWED_ORIGINS를 .env로 설정한 도메인만 허용한다 (기본값: 전부 차단).
+# 메서드/헤더도 "*"가 아니라 실제로 쓰는 것만 명시해서 공격 표면을 줄인다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_credentials=False,  # 쿠키 대신 X-API-Key 헤더로 인증하므로 불필요
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 app.include_router(health.router)

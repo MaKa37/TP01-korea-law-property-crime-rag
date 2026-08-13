@@ -56,6 +56,8 @@ def _stream_chat_tokens(
         raise RuntimeError(f"답변 생성 LLM 호출에 실패했습니다: {e}") from e
 
     finish_reason: Optional[str] = None
+    content_emitted = False
+    reasoning_chars = 0
     try:
         for raw_line in resp.iter_lines(decode_unicode=True):
             if not raw_line or not raw_line.startswith("data:"):
@@ -73,7 +75,20 @@ def _stream_chat_tokens(
             delta = choices[0].get("delta", {})
             token = delta.get("content")
             if token:
+                content_emitted = True
                 yield token
+            # nemotron-3-ultra 같은 추론(reasoning) 모델은 최종 답변 전에
+            # "생각하는" 토큰을 reasoning_content(또는 reasoning) 필드에 먼저
+            # 쓴다. content가 하나도 안 나왔는데 max_tokens에 도달했다면,
+            # 이 필드가 얼마나 찼는지가 원인 판단에 결정적인 단서가 된다.
+            reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning_piece:
+                reasoning_chars += len(reasoning_piece)
+
+                if config.stream_print:
+                    # 터미널에서 구분이 잘 되도록 진한 회색(\033[90m)으로 출력합니다.
+                    print(f"\033[90m{reasoning_piece}\033[0m", end="", flush=True)
+                    
             reason = choices[0].get("finish_reason")
             if reason:
                 finish_reason = reason
@@ -81,7 +96,16 @@ def _stream_chat_tokens(
         logger.error(f"🚨 스트리밍 중 연결 오류: {e}")
         raise RuntimeError(f"답변 생성 스트리밍 중 연결이 끊겼습니다: {e}") from e
 
-    if finish_reason == "length":
+    if not content_emitted and finish_reason == "length":
+        # content가 전혀 없는 채로 max_tokens에 도달 -> "반복 루프"보다는
+        # 추론 토큰이 전체 예산을 다 써버렸을 가능성이 높은 패턴이다.
+        # (진짜 반복 루프였다면 반복되는 텍스트라도 content에 쌓였을 것)
+        logger.warning(
+            f"⚠️ content를 하나도 받지 못한 채 max_tokens({config.max_tokens})에 도달했습니다 "
+            f"(reasoning 필드 길이: {reasoning_chars}자). 추론 토큰이 예산을 전부 소진했을 "
+            "가능성이 높습니다. MAX_TOKENS를 더 늘리거나, 이 현상의 재현 빈도를 지켜보세요."
+        )
+    elif finish_reason == "length":
         logger.warning(
             f"⚠️ max_tokens({config.max_tokens})에 도달하여 답변이 중간에 "
             "잘렸을 수 있습니다. MAX_TOKENS 값을 늘리는 것을 고려하세요."
