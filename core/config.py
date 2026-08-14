@@ -43,7 +43,7 @@ class RAGConfig:
     connect_timeout: int = int(os.getenv("CONNECT_TIMEOUT", "10"))
     embed_timeout: int = int(os.getenv("EMBED_TIMEOUT", "15"))
     rerank_timeout: int = int(os.getenv("RERANK_TIMEOUT", "20"))
-    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "180"))
+    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "60"))
 
     # Generation Settings
     # ⚠️ SYSTEM_PROMPT는 "관련 법령 해설 -> 유사 판례 요약 -> 피해자 조치 절차 ->
@@ -53,6 +53,12 @@ class RAGConfig:
     # 잘렸다(면책 조항 누락 확인됨). 여유 있게 상향.
     max_tokens: int = int(os.getenv("MAX_TOKENS", "8192"))
     stream_print: bool = os.getenv("STREAM_PRINT", "true").lower() == "true"
+    # "realtime": NVIDIA에서 오는 토큰을 실시간으로 그대로 릴레이 (원래 방식,
+    #             간헐적 한글 깨짐 재현됨)
+    # "buffered": 전체 답변을 다 모은 뒤 우리 쪽에서 고정 크기로 재분할해서
+    #             의사 스트리밍 (현재 기본값, 깨짐 회피용 임시 조치)
+    # 격리 테스트용 토글 - 원인 조사가 끝나면 하나로 정리할 예정
+    stream_mode: str = os.getenv("STREAM_MODE", "buffered")
 
     # Orchestration Settings (라우팅/질의 재작성용 - 가볍고 빠른 모델 사용)
     utility_model: str = os.getenv("UTILITY_MODEL", "meta/llama-3.1-8b-instruct")
