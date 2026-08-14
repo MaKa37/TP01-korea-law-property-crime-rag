@@ -59,8 +59,30 @@ def _stream_chat_tokens(
     content_emitted = False
     reasoning_chars = 0
     try:
-        for raw_line in resp.iter_lines(decode_unicode=True):
-            if not raw_line or not raw_line.startswith("data:"):
+        # ⚠️ iter_lines(decode_unicode=True)는 쓰지 않는다. requests가 네트워크
+        # 청크 단위로 인코딩을 판단해 디코딩하는데, 한글 같은 멀티바이트(UTF-8
+        # 3바이트) 문자가 청크 경계에서 잘리면 그 지점이 깨진다("횡령"이
+        # "��령"으로 나오는 식). 줄바꿈(0x0A)은 UTF-8에서 멀티바이트 문자의
+        # 일부로 절대 나타나지 않는 바이트이므로, 바이트 상태로 먼저 줄 단위로
+        # 자르고(iter_lines 기본 동작) 완성된 한 줄을 통째로 디코딩하면 중간에
+        # 깨질 수가 없다.
+        for raw_line_bytes in resp.iter_lines():
+            if not raw_line_bytes:
+                continue
+            raw_line = raw_line_bytes.decode("utf-8", errors="strict")
+            if "\ufffd" in raw_line:
+                # 진단용: 우리 디코딩(errors="strict")은 바이트가 진짜로 깨졌으면
+                # 조용히 넘어가지 않고 예외를 던진다. 그런데도 여기서 U+FFFD가
+                # 보인다는 건, NVIDIA 서버가 보낸 JSON content 필드 안에 이미
+                # 이 문자가 들어있었다는 뜻이다 (우리 쪽 디코딩 문제가 아님).
+                idx = raw_line.index("\ufffd")
+                context = raw_line[max(0, idx - 20):idx + 20]
+                logger.warning(
+                    f"⚠️ 업스트림 응답에 U+FFFD(깨진 문자)가 이미 포함되어 있음 "
+                    f"(우리 쪽 디코딩 문제 아님, 서버/모델 쪽 문제로 추정). "
+                    f"주변 텍스트: ...{context}..."
+                )
+            if not raw_line.startswith("data:"):
                 continue
             data_str = raw_line[len("data:"):].strip()
             if data_str == "[DONE]":
@@ -84,11 +106,6 @@ def _stream_chat_tokens(
             reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning_piece:
                 reasoning_chars += len(reasoning_piece)
-
-                if config.stream_print:
-                    # 터미널에서 구분이 잘 되도록 진한 회색(\033[90m)으로 출력합니다.
-                    print(f"\033[90m{reasoning_piece}\033[0m", end="", flush=True)
-                    
             reason = choices[0].get("finish_reason")
             if reason:
                 finish_reason = reason

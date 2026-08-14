@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: legal-rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    # AOF(Append Only File) 활성화: 컨테이너를 껐다 켜도, 볼륨이 남아있는 한
+    # 세션 데이터가 유지된다. 기본값(AOF 꺼짐)이면 재시작 시 데이터가 날아간다.
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
+    # 이 볼륨을 지우기 전까지는(`docker compose down -v`) 데이터가 유지된다.
+    # `docker compose down`(볼륨 옵션 없이)만으로는 데이터가 안 지워진다.
+
+# # 1) WSL의 redis-server가 켜져 있다면 먼저 꺼서 포트 충돌 방지
+# #    WSL 터미널에서:
+# sudo service redis-server stop
+
+# # 2) Docker Desktop이 켜져 있는지 확인 후, 프로젝트 루트에서:
+# docker compose up -d redis
+
+# # 3) 정상 기동 확인
+# docker compose ps
+# docker exec -it legal-rag-redis redis-cli ping   # PONG 나와야 정상
+
+# # 4) 앱은 그대로 재시작 (.env 안 건드려도 됨 — REDIS_HOST=127.0.0.1, REDIS_PORT=6379 그대로)
+# uvicorn app.main:app --reload
+
+# # 5) 진짜로 Docker의 Redis에 붙었는지 확인
+# curl http://127.0.0.1:8000/health
+# # {"status": "ok", "checks": {..., "session_store": {"status": "ok", "backend": "redis"}}}

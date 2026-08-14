@@ -10,7 +10,7 @@ from core.config import RAGConfig
 from core.logging import get_logger
 from db.pool import create_db_pool
 from rag.embedding import get_embedding
-from rag.generator import build_fallback_answer, generate_response, generate_response_stream
+from rag.generator import build_fallback_answer, generate_response
 from rag.reranker import rerank_candidates, select_diverse_top_k
 from rag.retrieval import execute_hybrid_search, execute_keyword_search
 
@@ -185,12 +185,34 @@ class LegalRAGBot:
             ]
         }
 
+        # ⚠️ 원래는 NVIDIA에서 오는 토큰을 실시간으로 그대로 릴레이했으나,
+        # 한글이 간헐적으로 깨지는 문제가 있었다(예: "횡령"->"��령").
+        # generate_response_stream()으로 실시간 릴레이할 때만 재현되고,
+        # generate_response()로 전체를 모은 뒤 우리 쪽에서 고정 크기로
+        # 재분할해서 보내면 재현되지 않는 것을 확인했다 -> 원인이 NVIDIA
+        # 응답 내용 자체가 아니라 "토큰 단위로 잘게 쪼개 실시간 전달하는
+        # 방식"에 있었다는 뜻으로 보인다.
+        #
+        # 트레이드오프: 이제 generate_response()가 전체 답변을 다 모을
+        # 때까지(수십~백여 초) 기다린 뒤에야 스트리밍을 시작한다. 실시간
+        # 타이핑 효과는 사라지고, 사용자는 그동안 아무 진행 표시도 못 본다.
+        # NVIDIA 쪽 요청 자체는 여전히 stream=True로 청크 단위로 받으므로
+        # (chat_timeout이 전체 시간이 아니라 청크 간 대기시간에 적용됨),
+        # 타임아웃 안정성에는 영향이 없다.
         llm_available = True
         try:
-            for token in generate_response_stream(self.stream_session, self.config, self.logger, user_query, top_docs):
-                yield {"type": "token", "content": token}
+            full_answer = generate_response(self.stream_session, self.config, self.logger, user_query, top_docs)
+
+            # 우리 쪽에서 고정 크기(3자)로 재분할해서 의사(擬似) 스트리밍한다.
+            # 실시간성은 없지만, 클라이언트가 응답을 한 번에 다 받는 것보다는
+            # 점진적으로 렌더링할 수 있다.
+            chunk_size = 3
+            for i in range(0, len(full_answer), chunk_size):
+                yield {"type": "token", "content": full_answer[i:i + chunk_size]}
+                time.sleep(0.015)
+
         except Exception as e:
-            self.logger.error(f"🚨 스트리밍 답변 생성 실패, 검색된 원문 자료로 대체합니다: {e}")
+            self.logger.error(f"🚨 답변 생성 실패, 검색된 원문 자료로 대체합니다: {e}")
             fallback = build_fallback_answer(top_docs)
             yield {"type": "token", "content": fallback}
             llm_available = False

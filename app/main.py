@@ -15,6 +15,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes import chat, health
 from app.auth import API_KEYS
+from app.middleware import RequestLoggingMiddleware
 from app.rate_limit import limiter
 from core.config import RAGConfig
 from core.logging import get_logger
@@ -77,6 +78,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# 요청 ID 발급 + 요청/응답 로깅 (다른 미들웨어보다 먼저 등록해서 가장 바깥에서 감싸도록 함)
+app.add_middleware(RequestLoggingMiddleware)
 
 # 레이트리밋: limiter를 app.state에 연결하고, 초과 시 429를 반환하는
 # 핸들러와 미들웨어를 등록한다. 실제 제한 값은 각 라우트에서
