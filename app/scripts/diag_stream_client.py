@@ -20,6 +20,11 @@ A와 B 둘 다 깨진다면 -> 우리 서버가 클라이언트로 보내는 바
 사용법:
     python scripts/diag_stream_client.py "질문 텍스트"
     python scripts/diag_stream_client.py "질문 텍스트" --repeat 5
+    # 5회 추가 반복
+    DIAG_API_KEY=my-secret-key-1 python app/scripts/diag_stream_client.py "회사 이사가 담보 없이 자금을 대여하면 배임죄인가요?" --repeat 5
+
+    # 또는 다양한 한글 문장이 포함된 질문
+    DIAG_API_KEY=my-secret-key-1 python app/scripts/diag_stream_client.py "보이스피싱 전달책으로 연루되었을 때 사기방조죄 성립 요건과 대처 방법은?" --repeat 5
 """
 import argparse
 import json

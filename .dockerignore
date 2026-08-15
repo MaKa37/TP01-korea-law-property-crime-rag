@@ -1,0 +1,23 @@
+# 비밀정보 - 절대 이미지에 포함하지 않음
+.env
+.env.*
+!.env.example
+
+# 버전관리/개발도구
+.git
+.gitignore
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+
+# 로컬 가상환경 (컨테이너 안에서는 무의미)
+venv/
+.venv/
+
+# 평가/실험 산출물 (용량 크고 이미지에 불필요)
+evaluation/reports/
+
+# 문서/기타
+README.md
+docker-compose.yml

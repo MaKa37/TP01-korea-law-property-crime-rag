@@ -43,7 +43,13 @@ class RAGConfig:
     connect_timeout: int = int(os.getenv("CONNECT_TIMEOUT", "10"))
     embed_timeout: int = int(os.getenv("EMBED_TIMEOUT", "15"))
     rerank_timeout: int = int(os.getenv("RERANK_TIMEOUT", "20"))
-    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "60"))
+    # ⚠️ 실사용 관찰 결과, 무거운 질문은 답변 생성에 170~400초까지 걸릴 수
+    # 있다. 이 타임아웃은 "전체 생성 시간"이 아니라 "토큰 사이 대기 시간"에
+    # 적용되지만, 그래도 60초는 너무 빡빡해서 정상적인 생성도 폴백으로
+    # 넘어가는 경우가 있었다. .env의 CHAT_TIMEOUT 설정이 실수로 사라져도
+    # (예: uvicorn --reload는 .env 변경을 자동 반영하지 않음) 안전하도록
+    # 코드 기본값 자체를 올려둔다.
+    chat_timeout: int = int(os.getenv("CHAT_TIMEOUT", "180"))
 
     # Generation Settings
     # ⚠️ SYSTEM_PROMPT는 "관련 법령 해설 -> 유사 판례 요약 -> 피해자 조치 절차 ->
