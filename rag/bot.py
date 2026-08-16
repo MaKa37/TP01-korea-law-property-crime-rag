@@ -11,6 +11,7 @@ from core.logging import get_logger
 from db.pool import create_db_pool
 from rag.embedding import get_embedding
 from rag.generator import build_fallback_answer, generate_response, generate_response_stream
+from rag.grounding import check_grounding
 from rag.reranker import rerank_candidates, select_diverse_top_k
 from rag.retrieval import execute_hybrid_search, execute_keyword_search
 
@@ -124,6 +125,16 @@ class LegalRAGBot:
                 answer = build_fallback_answer(top_docs)
                 llm_available = False
 
+            if llm_available:
+                grounding = check_grounding(answer, top_docs)
+                if grounding["has_unverified"]:
+                    self.logger.warning(
+                        f"🚨 답변에 검색 문서에 없는 판례 번호가 포함됨(hallucination 의심): "
+                        f"{grounding['unverified_citations']}. 검색 원문으로 대체합니다."
+                    )
+                    answer = build_fallback_answer(top_docs)
+                    llm_available = False
+
             latency = time.time() - start_time
             self.logger.info(f"답변 생성 완료 (총 소요 시간: {latency:.2f}초, LLM 사용: {llm_available})")
 
@@ -198,10 +209,36 @@ class LegalRAGBot:
         llm_available = True
         try:
             if self.config.stream_mode == "realtime":
+                # ⚠️ 실시간 모드는 토큰이 이미 클라이언트로 나간 뒤에야 전체
+                # 텍스트를 확인할 수 있어서, 근거 검증에 걸려도 되돌릴 수
+                # 없다. 로그로 남겨서 사후에라도 문제를 파악할 수 있게 한다.
+                collected = []
                 for token in generate_response_stream(self.stream_session, self.config, self.logger, user_query, top_docs):
+                    collected.append(token)
                     yield {"type": "token", "content": token}
+
+                grounding = check_grounding("".join(collected), top_docs)
+                if grounding["has_unverified"]:
+                    self.logger.warning(
+                        f"🚨 [realtime 모드] 답변에 검색 문서에 없는 판례 번호가 포함됨"
+                        f"(hallucination 의심, 이미 전송됨 - 되돌릴 수 없음): "
+                        f"{grounding['unverified_citations']}"
+                    )
+                    llm_available = False  # 클라이언트에는 이미 나갔지만, 품질 지표는 정확히 남긴다
             else:
                 full_answer = generate_response(self.stream_session, self.config, self.logger, user_query, top_docs)
+
+                # buffered 모드는 아직 아무것도 전송하기 전이므로, 여기서
+                # 걸리면 사용자에게 지어낸 판례 대신 안전한 원문으로 바꿔치기할 수 있다.
+                grounding = check_grounding(full_answer, top_docs)
+                if grounding["has_unverified"]:
+                    self.logger.warning(
+                        f"🚨 답변에 검색 문서에 없는 판례 번호가 포함됨(hallucination 의심): "
+                        f"{grounding['unverified_citations']}. 검색 원문으로 대체합니다."
+                    )
+                    full_answer = build_fallback_answer(top_docs)
+                    llm_available = False
+
                 # 우리 쪽에서 고정 크기(3자)로 재분할해서 의사(擬似) 스트리밍한다.
                 chunk_size = 3
                 for i in range(0, len(full_answer), chunk_size):

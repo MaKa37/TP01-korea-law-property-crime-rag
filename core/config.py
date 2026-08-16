@@ -85,3 +85,11 @@ class RAGConfig:
     # Diversity Settings (5순위 - 거의 동일한 내용의 문서가 top_k를 도배하는 것 방지)
     rerank_pool_multiplier: int = int(os.getenv("RERANK_POOL_MULTIPLIER", "3"))
     diversity_similarity_threshold: float = float(os.getenv("DIVERSITY_SIMILARITY_THRESHOLD", "0.85"))
+
+    # ⚠️ CANDIDATE_K를 올리면 리랭커에 넘어가는 후보도 그만큼 늘어나던 구조적
+    # 문제가 하이퍼파라미터 튜닝에서 발견됐다 (CANDIDATE_K=50이 30보다
+    # 일관되게 나빴음 - 후보가 늘어날수록 리랭커가 비교해야 할 노이즈도
+    # 늘어나 순위가 오히려 흐트러짐). CANDIDATE_K는 "1차 검색을 얼마나
+    # 넓게 볼지"만 담당하고, 리랭커에는 항상 이 상한까지만 넘겨서
+    # (RRF 점수 상위 N개) 리랭커가 보는 노이즈 양을 독립적으로 고정한다.
+    rerank_input_cap: int = int(os.getenv("RERANK_INPUT_CAP", "30"))

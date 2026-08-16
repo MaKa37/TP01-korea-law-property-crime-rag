@@ -23,10 +23,20 @@ def rerank_candidates(
     ⚠️ 여기서 반환하는 건 최종 top_k가 아니라 top_k의 N배(config.rerank_pool_multiplier)
     크기의 "후보 풀"이다. 최종 top_k 선정은 select_diverse_top_k()에서
     다양성까지 고려해 별도로 수행한다.
+
+    ⚠️ candidates는 이미 하이브리드 검색의 RRF 점수 순으로 정렬되어 들어온다
+    (rag/retrieval.py의 SQL이 ORDER BY rrf_score DESC로 정렬함). CANDIDATE_K를
+    올려서 candidates가 아무리 커져도, 리랭커에는 항상 상위 rerank_input_cap개
+    까지만 넘긴다 - 리랭커에 넘기는 후보 수가 CANDIDATE_K에 비례해서 커지면
+    리랭커가 비교해야 할 노이즈도 늘어나 오히려 순위가 흐트러지는 현상이
+    실측으로 확인됐다 (하이퍼파라미터 튜닝에서 CANDIDATE_K=50이 30보다
+    일관되게 나빴음). CANDIDATE_K는 "1차 검색을 얼마나 넓게 볼지"만 담당하고,
+    리랭커가 보는 노이즈 양은 이 상한으로 독립적으로 고정한다.
     """
     if not candidates:
         return []
 
+    candidates = candidates[:config.rerank_input_cap]
     pool_size = min(len(candidates), config.top_k * config.rerank_pool_multiplier)
 
     passages = [{"text": f"[{c['doc_type']}] {c['title']} {c['content']}"} for c in candidates]
