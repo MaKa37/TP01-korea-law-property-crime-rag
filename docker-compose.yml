@@ -6,8 +6,7 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    # AOF(Append Only File) 활성화: 컨테이너를 껐다 켜도, 볼륨이 남아있는 한
-    # 세션 데이터가 유지된다. 기본값(AOF 꺼짐)이면 재시작 시 데이터가 날아간다.
+    # 데이터 영속성 보장: 컨테이너 재시작 시 세션 유실 방지를 위한 AOF 모드 활성화
     command: redis-server --appendonly yes
     restart: unless-stopped
     healthcheck:
@@ -21,33 +20,26 @@ services:
     container_name: legal-rag-app
     ports:
       - "8000:8000"
-    # .env의 나머지 값(API 키, CHAT_MODEL 등)은 그대로 가져오고,
-    # 컴포즈 네트워크 안에서만 의미가 달라지는 두 값(REDIS_HOST, DB_HOST)만
-    # environment로 덮어쓴다 (environment가 env_file보다 우선함).
+    # [Dev] 로컬 코드 변경 사항 실시간 동기화 및 핫 리로드(Hot-reload) 활성화
+    volumes:
+      - .:/app  
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
+    # 컨테이너 네트워크에 맞춘 환경변수 오버라이드 (.env 설정보다 우선 적용)
     environment:
-      # 컴포즈 네트워크 안에서는 서비스 이름으로 접근한다 (localhost 아님)
       REDIS_HOST: redis
       SESSION_STORE_BACKEND: redis
-      # Docker Desktop(Windows/Mac)이 제공하는 특수 호스트명 - 컨테이너에서
-      # 호스트 머신에서 돌고 있는 Postgres에 접근할 때 쓴다. 지금 이 프로젝트의
-      # Postgres는 컨테이너화하지 않고 로컬(WSL/호스트)에서 그대로 쓰는 걸
-      # 전제로 한다.
       DB_HOST: host.docker.internal
     extra_hosts:
-      # Linux Docker 엔진에서도 host.docker.internal이 동작하도록 함
-      # (Docker Desktop은 기본 지원, Linux는 이 설정이 있어야 함 - 20.10+)
+      # Linux Docker 환경에서 host.docker.internal 매핑 지원 (호스트 머신 DB 접속용)
       - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      # HTTP 상태 코드는 항상 200이므로(우리 /health는 본문의 status
-      # 필드로 상태를 표현함), 본문을 파싱해서 "error"(치명적, 예: DB
-      # 장애)일 때만 unhealthy로 잡는다. "degraded"(예: Redis 장애 ->
-      # 메모리로 자동 폴백)는 서비스 자체는 계속되므로 healthy로 취급.
+      # 애플리케이션 무결성 검증: 치명적 예외(DB 연결 실패 등 status=='error') 시에만 unhealthy 판정
       test: ["CMD", "python", "-c", "import json,urllib.request,sys; d=json.loads(urllib.request.urlopen('http://localhost:8000/health',timeout=3).read()); sys.exit(0 if d.get('status')!='error' else 1)"]
       interval: 15s
       timeout: 5s
@@ -55,6 +47,7 @@ services:
       start_period: 20s
 
 volumes:
+  # Redis 세션 스토리지 영구 보존용 볼륨 (docker compose down -v 명령어 입력 시에만 초기화)
   redis-data:
-    # 이 볼륨을 지우기 전까지는(`docker compose down -v`) 데이터가 유지된다.
-    # `docker compose down`(볼륨 옵션 없이)만으로는 데이터가 안 지워진다.
+
+# 재실행: docker compose down -> docker compose up -d
