@@ -1,53 +1,91 @@
-"""생성된 답변의 근거 검증 (grounding check).
-
-LLM이 검색된 참고 자료에 없는 판례 번호를 지어내는 사례가 실제로
-관찰됐다 (검색 결과 5건 중 어디에도 없는 "2004도5167"을 인용, 심지어
-같은 사건번호에 선고일을 2004년/2006년으로 서로 다르게 적기까지 함).
-
-재시도/타임아웃/폴백 같은 장치는 전부 "API 호출 자체가 실패하는" 상황만
-막아준다. "API는 성공했지만 내용이 틀린" 경우는 이런 장치로 못 잡는다.
-이 모듈은 생성된 텍스트에서 판례 번호 패턴을 추출해서, 실제 검색된
-문서에 등장하는 번호인지 대조한다.
-
-⚠️ 완벽한 검증이 아니다. 정규식 기반 패턴 매칭이라 오탐/누락이 있을 수
-있고, "번호는 맞는데 인용된 법리가 실제로 그 판례 내용과 다르다"처럼
-더 미묘한 hallucination은 못 잡는다. 그래도 "존재하지 않는 판례 번호를
-지어내는" 명백한 사례는 확실히 잡아낸다.
 """
+rag/grounding.py
+================
+LLM이 생성한 답변의 법률적 근거(판례 번호 및 법조문 번호)를
+검색된 참고 문서와 대조하여 환각(Hallucination)을 탐지하고 차단하는 모듈입니다.
+"""
+
 import re
-from typing import Any, Dict, List
-
-# 한국 판례/사건번호 패턴: 연도(2~4자리) + 사건종류(한글 1~4자) + 일련번호
-# 예: "2004도5167", "2011고합187", "84누692", "91두1", "74그4".
-# 법조문 인용("형법 제355조")은 한글이 숫자 "앞"에 오므로 이 패턴에
-# 걸리지 않는다 (숫자-한글-숫자 순서만 매칭).
-CITATION_PATTERN = re.compile(r"\d{2,4}[가-힣]{1,4}\d+")
+from typing import Any, Dict, List, Set, Tuple
 
 
-def extract_citations(text: str) -> List[str]:
-    if not text:
-        return []
-    return CITATION_PATTERN.findall(text)
+class LegalGroundingVerifier:
+    def __init__(self):
+        # 1. 사건번호 패턴: 예) 2019도7370, 99도4923, 2018고합19, 2019가합40778, 97므1486 등
+        self.case_no_pattern = re.compile(
+            r"\b(\d{2,4}\s*(?:도|고합|고단|노|다|두|므|스|느|나|가합|가단|드단|드합|르)\s*\d+(?:,\s*\d+)*)\b"
+        )
+        # 2. 법조문 패턴 (앞선 단어와 분리하여 법령명만 정확히 캡처)
+        # 예) 형법 제347조, 특정경제범죄가중처벌등에관한법률 제3조제1항, 「민법」 제1115조 등
+        self.statute_art_pattern = re.compile(
+            r"(?:^|[^\w가-힣])[「『\"']?([가-힣]{1,20}(?:법|법률|규칙|규정|조례))[」』\"']?\s*제\s*(\d+)\s*조(?:의\s*(\d+))?"
+        )
+
+    def _normalize_text(self, text: str) -> str:
+        """비교를 위한 공백 및 특수기호 정규화"""
+        return re.sub(r"\s+", "", text)
+
+    def extract_case_numbers(self, text: str) -> Set[str]:
+        """텍스트에서 사건번호 목록 추출 (공백 제거 정규화)"""
+        matches = self.case_no_pattern.findall(text)
+        return {self._normalize_text(m) for m in matches}
+
+    def extract_statute_articles(self, text: str) -> Set[str]:
+        """텍스트에서 법령명+조문번호 조합 추출 (예: '형법제347조')"""
+        statutes = set()
+        for m in self.statute_art_pattern.finditer(text):
+            law_name = self._normalize_text(m.group(1))
+            main_art = m.group(2)
+            sub_art = f"의{m.group(3)}" if m.group(3) else ""
+            statutes.add(f"{law_name}제{main_art}조{sub_art}")
+        return statutes
+
+    def verify(
+        self,
+        generated_answer: str,
+        retrieved_documents: List[Dict[str, Any]],
+    ) -> Tuple[bool, Dict[str, Any]]:
+        """
+        생성된 답변과 검색된 문서를 대조 검증합니다.
+        
+        Returns:
+            (is_grounded, details_dict)
+        """
+        context_text = " ".join(
+            f"{doc.get('title', '')} {doc.get('content', '')}"
+            for doc in retrieved_documents
+        )
+        normalized_context = self._normalize_text(context_text)
+
+        # 1. 판례 사건번호 검증
+        gen_case_numbers = self.extract_case_numbers(generated_answer)
+        ungrounded_cases = [c for c in gen_case_numbers if c not in normalized_context]
+
+        # 2. 법령 조문 검증
+        gen_statutes = self.extract_statute_articles(generated_answer)
+        ungrounded_statutes = [s for s in gen_statutes if s not in normalized_context]
+
+        has_hallucination = bool(ungrounded_cases or ungrounded_statutes)
+        is_grounded = not has_hallucination
+
+        verification_details = {
+            "is_grounded": is_grounded,
+            "cited_cases": list(gen_case_numbers),
+            "ungrounded_cases": ungrounded_cases,
+            "cited_statutes": list(gen_statutes),
+            "ungrounded_statutes": ungrounded_statutes,
+        }
+
+        return is_grounded, verification_details
 
 
-def check_grounding(answer: str, retrieved_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """답변에 등장한 판례 번호가 실제 검색된 문서(제목+본문)에 존재하는지 검증.
+# 싱글톤 인스턴스
+grounding_verifier = LegalGroundingVerifier()
 
-    반환값:
-        total_citations: 답변에서 발견된 판례 번호 인용 개수
-        unverified_citations: 검색 문서 어디에도 없는 번호 목록
-        has_unverified: 하나라도 있으면 True
-    """
-    known_citations = set()
-    for doc in retrieved_docs:
-        known_citations.update(extract_citations(doc.get("title", "")))
-        known_citations.update(extract_citations(doc.get("content", "")))
 
-    answer_citations = extract_citations(answer)
-    unverified = sorted({c for c in answer_citations if c not in known_citations})
-
-    return {
-        "total_citations": len(answer_citations),
-        "unverified_citations": unverified,
-        "has_unverified": len(unverified) > 0,
-    }
+def check_grounding(
+    answer: str,
+    retrieved_documents: List[Dict[str, Any]],
+) -> Tuple[bool, Dict[str, Any]]:
+    """bot.py 하위 호환용 함수"""
+    return grounding_verifier.verify(answer, retrieved_documents)
