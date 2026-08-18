@@ -52,14 +52,15 @@ jobs:
           pip install pytest pytest-asyncio httpx
 
       - name: 자동화 테스트 실행
-        env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 5432
-          DB_NAME: postgres
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-          REDIS_HOST: 127.0.0.1
-          REDIS_PORT: 6379
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-        run: |
-          python -m pytest tests/ -v
+              env:
+                DB_HOST: 127.0.0.1
+                DB_PORT: 5432
+                DB_NAME: postgres
+                DB_USER: postgres
+                DB_PASSWORD: postgres
+                REDIS_HOST: 127.0.0.1
+                REDIS_PORT: 6379
+                API_KEYS: "ci-test-key-12345"
+                NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+              run: |
+                python -m pytest tests/ -v
