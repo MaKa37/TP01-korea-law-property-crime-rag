@@ -83,3 +83,29 @@ def execute_keyword_search(db_pool: ThreadedConnectionPool, config: RAGConfig, q
     finally:
         conn.rollback()
         db_pool.putconn(conn)
+
+def fetch_full_documents_by_cases(case_numbers: list[str], conn) -> list[dict]:
+    """사건번호 목록을 전달받아 legal_documents에서 원문 전체를 조회합니다."""
+    if not case_numbers:
+        return []
+    
+    query = """
+        SELECT prec_id, case_number, title, court_name, issue_date, full_text
+        FROM legal_documents
+        WHERE case_number = ANY(%s);
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(query, (case_numbers,))
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            results.append({
+                "prec_id": row[0],
+                "case_number": row[1],
+                "title": row[2],
+                "court_name": row[3],
+                "issue_date": row[4],
+                "full_text": row[5]
+            })
+        return results

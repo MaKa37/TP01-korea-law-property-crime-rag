@@ -16,16 +16,7 @@ def _stream_chat_tokens(
     query: str,
     retrieved_docs: List[Dict[str, Any]]
 ) -> Iterator[str]:
-    """NVIDIA Chat Completion API를 SSE로 호출해 토큰을 하나씩 yield하는 저수준 제너레이터.
-
-    550B급 대형 모델은 전체 응답 생성에 수십 초~수 분이 걸릴 수 있다.
-    stream=True로 SSE를 받아 "토큰이 끊기지 않는 한" 타임아웃이 나지
-    않도록 처리한다. timeout=(connect, read)에서 read는 전체 생성 시간이
-    아니라 "다음 청크가 올 때까지의 대기 시간"이다.
-
-    CLI(blocking 수집+콘솔 출력)와 API(그대로 클라이언트로 릴레이) 양쪽에서
-    이 제너레이터 하나를 공유한다. 예외는 호출부에서 처리하도록 그대로 전파한다.
-    """
+    """NVIDIA Chat Completion API를 SSE로 호출해 토큰을 하나씩 yield하는 저수준 제너레이터."""
     context_str = "\n\n".join(
         f"[문서 {i+1}] (출처: {doc['title']})\n{doc['content']}"
         for i, doc in enumerate(retrieved_docs)
@@ -59,27 +50,15 @@ def _stream_chat_tokens(
     content_emitted = False
     reasoning_chars = 0
     try:
-        # ⚠️ iter_lines(decode_unicode=True)는 쓰지 않는다. requests가 네트워크
-        # 청크 단위로 인코딩을 판단해 디코딩하는데, 한글 같은 멀티바이트(UTF-8
-        # 3바이트) 문자가 청크 경계에서 잘리면 그 지점이 깨진다("횡령"이
-        # "��령"으로 나오는 식). 줄바꿈(0x0A)은 UTF-8에서 멀티바이트 문자의
-        # 일부로 절대 나타나지 않는 바이트이므로, 바이트 상태로 먼저 줄 단위로
-        # 자르고(iter_lines 기본 동작) 완성된 한 줄을 통째로 디코딩하면 중간에
-        # 깨질 수가 없다.
         for raw_line_bytes in resp.iter_lines():
             if not raw_line_bytes:
                 continue
             raw_line = raw_line_bytes.decode("utf-8", errors="strict")
             if "\ufffd" in raw_line:
-                # 진단용: 우리 디코딩(errors="strict")은 바이트가 진짜로 깨졌으면
-                # 조용히 넘어가지 않고 예외를 던진다. 그런데도 여기서 U+FFFD가
-                # 보인다는 건, NVIDIA 서버가 보낸 JSON content 필드 안에 이미
-                # 이 문자가 들어있었다는 뜻이다 (우리 쪽 디코딩 문제가 아님).
                 idx = raw_line.index("\ufffd")
                 context = raw_line[max(0, idx - 20):idx + 20]
                 logger.warning(
-                    f"⚠️ 업스트림 응답에 U+FFFD(깨진 문자)가 이미 포함되어 있음 "
-                    f"(우리 쪽 디코딩 문제 아님, 서버/모델 쪽 문제로 추정). "
+                    f"⚠️ 업스트림 응답에 U+FFFD(깨진 문자)가 이미 포함되어 있음. "
                     f"주변 텍스트: ...{context}..."
                 )
             if not raw_line.startswith("data:"):
@@ -99,10 +78,7 @@ def _stream_chat_tokens(
             if token:
                 content_emitted = True
                 yield token
-            # nemotron-3-ultra 같은 추론(reasoning) 모델은 최종 답변 전에
-            # "생각하는" 토큰을 reasoning_content(또는 reasoning) 필드에 먼저
-            # 쓴다. content가 하나도 안 나왔는데 max_tokens에 도달했다면,
-            # 이 필드가 얼마나 찼는지가 원인 판단에 결정적인 단서가 된다.
+            
             reasoning_piece = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning_piece:
                 reasoning_chars += len(reasoning_piece)
@@ -114,19 +90,12 @@ def _stream_chat_tokens(
         raise RuntimeError(f"답변 생성 스트리밍 중 연결이 끊겼습니다: {e}") from e
 
     if not content_emitted and finish_reason == "length":
-        # content가 전혀 없는 채로 max_tokens에 도달 -> "반복 루프"보다는
-        # 추론 토큰이 전체 예산을 다 써버렸을 가능성이 높은 패턴이다.
-        # (진짜 반복 루프였다면 반복되는 텍스트라도 content에 쌓였을 것)
         logger.warning(
             f"⚠️ content를 하나도 받지 못한 채 max_tokens({config.max_tokens})에 도달했습니다 "
-            f"(reasoning 필드 길이: {reasoning_chars}자). 추론 토큰이 예산을 전부 소진했을 "
-            "가능성이 높습니다. MAX_TOKENS를 더 늘리거나, 이 현상의 재현 빈도를 지켜보세요."
+            f"(reasoning 필드 길이: {reasoning_chars}자)."
         )
     elif finish_reason == "length":
-        logger.warning(
-            f"⚠️ max_tokens({config.max_tokens})에 도달하여 답변이 중간에 "
-            "잘렸을 수 있습니다. MAX_TOKENS 값을 늘리는 것을 고려하세요."
-        )
+        logger.warning(f"⚠️ max_tokens({config.max_tokens})에 도달하여 답변이 중간에 잘렸을 수 있습니다.")
 
 
 def generate_response_stream(
@@ -136,7 +105,7 @@ def generate_response_stream(
     query: str,
     retrieved_docs: List[Dict[str, Any]]
 ) -> Iterator[str]:
-    """API 서비스 계층용: 토큰을 그대로 yield한다. 호출부(FastAPI 라우트)가 SSE로 감싼다."""
+    """API 서비스 계층용: 토큰을 그대로 yield한다."""
     yield from _stream_chat_tokens(session, config, logger, query, retrieved_docs)
 
 
@@ -147,7 +116,7 @@ def generate_response(
     query: str,
     retrieved_docs: List[Dict[str, Any]]
 ) -> str:
-    """CLI/평가 하네스용: 토큰을 전부 모아 완성된 문자열로 반환. 실패 시 예외를 발생시킨다."""
+    """CLI/평가 하네스용: 토큰을 전부 모아 완성된 문자열로 반환."""
     collected: List[str] = []
     if config.stream_print:
         print("\n🤖 [AI 어시스턴트 답변] (실시간 생성 중)\n", flush=True)
@@ -171,16 +140,15 @@ def generate_response(
 
 
 def build_fallback_answer(retrieved_docs: List[Dict[str, Any]]) -> str:
-    """LLM 호출이 실패했을 때, 검색된 원문 자료라도 정리해서 보여주는 대체 답변."""
+    """LLM 호출 실패 시 검색된 원문 자료를 제공하는 대체 답변."""
     lines = [
         "⚠️ 현재 AI 답변 생성 서비스에 일시적인 장애가 발생하여, "
         "검색된 참고 자료 원문을 대신 안내해 드립니다.\n"
     ]
     for i, doc in enumerate(retrieved_docs, 1):
-        content = doc["content"]
-        snippet = content if len(content) <= 500 else content[:500] + "..."
-        lines.append(f"### {i}. {doc['title']} ({doc.get('doc_type', '')})")
-        lines.append(snippet)
+        content = doc.get("full_text") or doc.get("content", "")
+        lines.append(f"### {i}. {doc.get('title', '제목없음')} ({doc.get('doc_type', '판례')})")
+        lines.append(content)
         lines.append("")
     lines.append(
         "> ⚠️ **면책 조항:** 위 자료는 AI 요약 없이 제공되는 원문 발췌이며, "
