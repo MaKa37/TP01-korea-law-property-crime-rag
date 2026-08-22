@@ -309,9 +309,11 @@ class LegalRAGBot:
             llm_available = False
 
         if llm_available:
-            grounding = check_grounding(answer, top_docs)
-            if grounding.get("has_unverified"):
-                self.logger.warning(f"🚨 미검증 인용({grounding.get('unverified_citations')}) 감지 - 원문 대체")
+            is_grounded, details = check_grounding(answer, top_docs)
+            if not is_grounded:
+                self.logger.warning(
+                    f"🚨 미검증 인용 감지 - 사건: {details.get('ungrounded_cases')}, 법조문: {details.get('ungrounded_statutes')} (원문 대체)"
+                )
                 answer = build_fallback_answer(top_docs)
                 llm_available = False
 
@@ -402,15 +404,20 @@ class LegalRAGBot:
                     collected.append(token)
                     yield {"type": "token", "content": token}
 
-                grounding = check_grounding("".join(collected), top_docs)
-                if grounding.get("has_unverified"):
-                    self.logger.warning(f"🚨 [Realtime] 미검증 인용 감지: {grounding.get('unverified_citations')}")
+                # check_grounding 반환 형태: (bool, dict)
+                is_grounded, details = check_grounding("".join(collected), top_docs)
+                if not is_grounded:
+                    self.logger.warning(
+                        f"🚨 [Realtime] 미검증 인용 감지 - 사건: {details.get('ungrounded_cases')}, 법조문: {details.get('ungrounded_statutes')}"
+                    )
                     llm_available = False
             else:
                 full_answer = generate_response(self.stream_session, self.config, self.logger, user_query, top_docs)
-                grounding = check_grounding(full_answer, top_docs)
-                if grounding.get("has_unverified"):
-                    self.logger.warning(f"🚨 미검증 인용 감지({grounding.get('unverified_citations')}) - 원문으로 대체")
+                is_grounded, details = check_grounding(full_answer, top_docs)
+                if not is_grounded:
+                    self.logger.warning(
+                        f"🚨 미검증 인용 감지 - 사건: {details.get('ungrounded_cases')}, 법조문: {details.get('ungrounded_statutes')} (원문 대체)"
+                    )
                     full_answer = build_fallback_answer(top_docs)
                     llm_available = False
 
@@ -420,7 +427,7 @@ class LegalRAGBot:
                     time.sleep(0.015)
 
         except Exception as e:
-            self.logger.error(f"🚨 LLM 답변 생성 오류 발생, 검색 원문으로 대체: {e}", exc_info=True)
+            self.logger.error(f"🚨 LLM 답변 생성 오류 발생, 폴백 메시지 출력: {e}", exc_info=True)
             fallback = build_fallback_answer(top_docs)
             yield {"type": "token", "content": fallback}
             llm_available = False

@@ -140,19 +140,31 @@ def generate_response(
 
 
 def build_fallback_answer(retrieved_docs: List[Dict[str, Any]]) -> str:
-    """LLM 호출 실패 시 검색된 원문 자료를 제공하는 대체 답변."""
+    """LLM 호출 실패 또는 오류 발생 시 간결한 안내 및 참고 판례 목록만 제공하는 대체 답변."""
     lines = [
-        "⚠️ 현재 AI 답변 생성 서비스에 일시적인 장애가 발생하여, "
-        "검색된 참고 자료 원문을 대신 안내해 드립니다.\n"
+        "⚠️ **AI 법률 답변 생성 서비스에 일시적인 지연/오류가 발생했습니다.**",
+        "",
+        "의뢰인의 질문과 관련하여 검색된 주요 법령 및 판례 목록은 다음과 같습니다.",
+        "각 판례의 상세 원문은 **하단 판례 토글(📑 참고 법령 및 판례)**을 열어 확인하실 수 있습니다.",
+        "",
+        "### 🔍 검색된 관련 법령 및 판례 목록"
     ]
+    
     for i, doc in enumerate(retrieved_docs, 1):
-        content = doc.get("full_text") or doc.get("content", "")
-        lines.append(f"### {i}. {doc.get('title', '제목없음')} ({doc.get('doc_type', '판례')})")
-        lines.append(content)
-        lines.append("")
+        title = doc.get("title", "제목 없음")
+        doc_type = doc.get("doc_type", "판례")
+        case_no = doc.get("case_number", "")
+        court = doc.get("court_name", "")
+        
+        meta = f"[{case_no}]" if case_no else ""
+        if court:
+            meta += f" ({court})"
+            
+        lines.append(f"* **{i}. {title}** {meta}")
+
+    lines.append("")
     lines.append(
-        "> ⚠️ **면책 조항:** 위 자료는 AI 요약 없이 제공되는 원문 발췌이며, "
-        "법적 조언이 아닙니다. 정확한 판단을 위해 대한법률구조공단(국번없이 132)이나 "
-        "전문 변호사의 상담을 받으시기 바랍니다."
+        "> **면책 조항:** 위 자료는 시스템 장애로 인해 제공되는 관련 판례 안내이며, 법적 조언이 아닙니다. "
+        "정확한 상담을 위해 대한법률구조공단(국번없이 132) 또는 전문 변호사의 조력을 받으시길 권장합니다."
     )
     return "\n".join(lines)

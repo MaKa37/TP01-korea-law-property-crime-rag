@@ -1,11 +1,12 @@
 """
 client/web_ui.py
 ================
-Streamlit 기반 실시간 법률 RAG 채팅 UI (Obsidian 서식 최적화 완성본)
+Streamlit 기반 실시간 법률 RAG 채팅 UI (v2 최종 배포본)
 - 옵시디언 스타일 계층형 헤더(# ~ ####) 및 굵은 서수(**1)**, - **①**) 완벽 렌더링
 - 하위 중첩 리스트 및 날짜(2010. 4. 8.) 공백 정규화
 - 판례 원문 전용 옵시디언 콜아웃 카드 뷰
 - 실시간 SSE 스트리밍, 답변 재생성(Retry), 100% 클립보드 복사
+- 하단 액션 툴바 아이콘 UI 4종 규격 및 스타일 완전 동기화 (36x36px, iframe 아티팩트 제거)
 """
 
 import html
@@ -13,6 +14,8 @@ import json
 import os
 import re
 import uuid
+from typing import Any, Dict, List, Optional
+
 import httpx
 import streamlit as st
 import streamlit.components.v1 as components
@@ -20,11 +23,12 @@ from dotenv import load_dotenv
 
 # --- 0. 환경 변수 로드 ---
 load_dotenv()
-API_KEY = os.getenv("API_KEYS", "test-secret-key-1").split(",")[0].strip()
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/chat")
+API_KEY: str = os.getenv("API_KEYS", "test-secret-key-1").split(",")[0].strip()
+BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000/chat")
+TIMEOUT_SECONDS: float = 90.0
 
 
-# --- 1. 페이지 설정 및 옵시디언 테마 CSS ---
+# --- 1. 페이지 설정 및 디자인 시스템 CSS ---
 st.set_page_config(
     page_title="재산범죄 법률 AI 어시스턴트",
     page_icon="⚖️",
@@ -41,7 +45,7 @@ st.markdown("""
         letter-spacing: -0.012em;
     }
 
-    /* 본문 줄간격 및 한국어 줄바꿈 */
+    /* 본문 줄간격 및 한국어 단어 줄바꿈 */
     .stMarkdown p, .stMarkdown div {
         line-height: 1.8 !important;
         word-break: keep-all !important;
@@ -51,15 +55,15 @@ st.markdown("""
 
     /* 옵시디언 스타일 헤더 계층 구조 */
     .stMarkdown h1 { 
-        font-size: 1.60rem !important; 
+        font-size: 1.55rem !important; 
         font-weight: 800 !important; 
         margin-top: 1.6rem !important; 
-        margin-bottom: 0.8rem !important;
-        padding-bottom: 0.4rem !important;
+        margin-bottom: 0.8rem !important; 
+        padding-bottom: 0.4rem !important; 
         border-bottom: 2px solid rgba(128, 128, 128, 0.25) !important;
     }
     .stMarkdown h2 { 
-        font-size: 1.35rem !important; 
+        font-size: 1.32rem !important; 
         font-weight: 700 !important; 
         margin-top: 1.4rem !important; 
         margin-bottom: 0.6rem !important; 
@@ -67,26 +71,26 @@ st.markdown("""
         padding-bottom: 0.3rem !important; 
     }
     .stMarkdown h3 { 
-        font-size: 1.18rem !important; 
+        font-size: 1.15rem !important; 
         font-weight: 700 !important; 
         margin-top: 1.2rem !important; 
         margin-bottom: 0.5rem !important; 
         color: #4a90e2 !important;
     }
     .stMarkdown h4 { 
-        font-size: 1.05rem !important; 
+        font-size: 1.02rem !important; 
         font-weight: 600 !important; 
         margin-top: 1.0rem !important; 
         margin-bottom: 0.4rem !important; 
     }
 
-    /* 강조 텍스트 (Bold) 시인성 강화 */
+    /* 강조 텍스트 시인성 강화 */
     .stMarkdown strong {
         font-weight: 700 !important;
         color: inherit;
     }
 
-    /* 리스트 및 계층형 불릿 여백 최적화 */
+    /* 리스트 및 계층형 불릿 여백 */
     .stMarkdown ul, .stMarkdown ol {
         padding-left: 1.3rem !important;
         margin-top: 0.4rem !important;
@@ -112,16 +116,7 @@ st.markdown("""
         font-style: normal !important;
     }
 
-    /* 인라인 코드 */
-    .stMarkdown code:not(pre code) {
-        background-color: rgba(128, 128, 128, 0.12) !important;
-        padding: 0.15rem 0.35rem !important;
-        border-radius: 4px !important;
-        font-size: 0.88em !important;
-        font-family: "JetBrains Mono", Consolas, monospace !important;
-    }
-
-    /* 판례 원문 전용 단일 카드 블록 (Obsidian Callout Card) */
+    /* 판례 원문 전용 단일 카드 블록 */
     .legal-callout-card {
         background-color: rgba(128, 128, 128, 0.04);
         border: 1px solid rgba(128, 128, 128, 0.18);
@@ -138,24 +133,75 @@ st.markdown("""
         overflow-y: auto;
     }
 
-    .legal-card-header {
-        font-weight: 700;
-        font-size: 0.96rem;
-        margin-bottom: 0.6rem;
-        padding-bottom: 0.4rem;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-        display: flex;
-        align-items: center;
-        gap: 6px;
+    /* ========================================================= */
+    /* [액션 툴바 아이콘 완전 동기화 및 iframe 잔상 제거]        */
+    /* ========================================================= */
+
+    /* 1. 컬럼 컨테이너 정렬 및 마진 초기화 */
+    div[data-testid="column"] {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 
-    /* 하단 액션 버튼 */
-    div[data-testid="column"] button {
-        border-radius: 6px !important;
-        min-height: 32px !important;
-        height: 32px !important;
-        padding: 0 8px !important;
-        font-size: 0.82rem !important;
+    div[data-testid="column"] > div {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 36px !important;
+        height: 36px !important;
+    }
+
+    /* 2. 일반 st.button (👍, 👎, 🔄) 36px 스타일 */
+    div[data-testid="column"] div[data-testid="stButton"] > button {
+        width: 36px !important;
+        height: 36px !important;
+        min-width: 36px !important;
+        min-height: 36px !important;
+        max-width: 36px !important;
+        max-height: 36px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(128, 128, 128, 0.25) !important;
+        background-color: rgba(128, 128, 128, 0.08) !important;
+        color: inherit !important;
+        font-size: 0.98rem !important;
+        line-height: 1 !important;
+        outline: none !important;
+        box-shadow: none !important;
+        transition: all 0.15s ease-in-out !important;
+    }
+
+    div[data-testid="column"] div[data-testid="stButton"] > button:hover {
+        border-color: rgba(128, 128, 128, 0.55) !important;
+        background-color: rgba(128, 128, 128, 0.16) !important;
+    }
+
+    div[data-testid="column"] div[data-testid="stButton"] > button:active {
+        transform: scale(0.95) !important;
+    }
+
+    /* 3. 복사 버튼 iframe (📋) 모서리 아티팩트 및 아웃라인 완전 박멸 */
+    div[data-testid="column"] div[data-testid="stIFrame"],
+    div[data-testid="column"] div[data-testid="stIFrame"] > iframe,
+    div[data-testid="column"] iframe {
+        width: 36px !important;
+        height: 36px !important;
+        min-width: 36px !important;
+        min-height: 36px !important;
+        max-width: 36px !important;
+        max-height: 36px !important;
+        display: block !important;
+        border: none !important;
+        outline: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -165,31 +211,28 @@ st.markdown("""
 def sanitize_legal_markdown(text: str) -> str:
     """
     옵시디언 마크다운 구조(**볼드**, 헤더, 계층 불릿)를 완벽 보존하면서
-    Streamlit CommonMark 파서 충돌(의도치 않은 코드블록, 리스트 붕괴)을 방지합니다.
+    Streamlit CommonMark 파서 충돌을 방지합니다.
     """
     if not text:
         return ""
 
-    # 코드 블록(```) 영역과 일반 텍스트 영역 분리
     parts = text.split("```")
     sanitized_parts = []
 
     for idx, part in enumerate(parts):
-        if idx % 2 == 0:  # 일반 텍스트 영역
+        if idx % 2 == 0:
             lines = part.split("\n")
             cleaned_lines = []
-            
+
             for line in lines:
-                # 0. 탭(\t)을 공백 4칸으로 치환 후 처리
                 line = line.replace("\t", "    ")
 
-                # 1. 헤더(#, ##, ###, ####) 라인은 마크다운 문법 그대로 완벽 보존
+                # 헤더 라인 보존
                 if re.match(r"^\s*#{1,6}\s+", line):
                     cleaned_lines.append(line.strip())
                     continue
 
-                # 2. 리스트 불릿('-', '*', '+') 및 서브 리스트 들여쓰기 정규화
-                # 4칸 이상 과도한 들여쓰기로 인한 코드블록 오작동 방지 (2칸 단위 들여쓰기로 통일)
+                # 리스트 불릿 들여쓰기 2칸 단위 정규화
                 bullet_match = re.match(r"^(\s*)([-*+])\s+(.*)$", line)
                 if bullet_match:
                     indent, marker, content = bullet_match.groups()
@@ -198,60 +241,122 @@ def sanitize_legal_markdown(text: str) -> str:
                     cleaned_lines.append(f"{normalized_indent}{marker} {content}")
                     continue
 
-                # 3. 선행 공백이 4칸 이상인 일반 문단이 코드 블록(<pre>)으로 변환되는 것 차단
+                # 문단 시작 4칸 이상 공백의 의도치 않은 코드블록 변환 방지
                 line = re.sub(r"^ {4,}", "  ", line)
 
-                # 4. 날짜 및 서수 뒤 다중 공백 정규화 ('2010.   4.   8.' -> '2010. 4. 8.')
+                # 날짜 및 서수 뒤 다중 공백 정규화
                 line = re.sub(r"(?<=\d[.)])\s{2,}", " ", line)
 
-                # 5. 문단 시작 부분의 단순 서수('1. ', '가. ')가 불필요한 <ol> 태그를 생성하지 않도록
-                #    단, '**1)**' 또는 '**가)**' 처럼 이미 볼드 처리된 서식은 그대로 유지
+                # 단순 번호가 ol 태그로 변환되는 것 방지
                 if re.match(r"^\s*(?:[0-9]+|[가-힣])[.)]\s+", line):
-                    line = re.sub(
-                        r"^(\s*(?:[0-9]+|[가-힣]))([.)])\s+",
-                        r"\1\2" + "\u00A0",
-                        line
-                    )
+                    line = re.sub(r"^(\s*(?:[0-9]+|[가-힣]))([.)])\s+", r"\1\2" + "\u00A0", line)
 
-                # 6. 불필요한 단독 취소선(~) 오작동 방지
+                # 단독 물결(~) 문법 오작동 방지
                 line = re.sub(r"(?<!\\)~", r"\~", line)
-
                 cleaned_lines.append(line)
-            
+
             sanitized_parts.append("\n".join(cleaned_lines))
         else:
-            # 코드 블록 내부는 원문 그대로 보존
             sanitized_parts.append(part)
 
-    # 3개 이상의 불필요한 연속 개행을 깔끔하게 2개로 압축
     result = "```".join(sanitized_parts)
     return re.sub(r"\n{3,}", "\n\n", result)
 
 
-# --- 3. 클립보드 복사 자바스크립트 주입 ---
-def copy_to_clipboard_js(text: str):
+# --- 3. 클립보드 복사 자바스크립트 컴포넌트 ---
+def render_copy_button(text: str, key_id: str):
+    """36x36px 크기로 완벽하게 규격화된 네이티브 클립보드 복사 버튼"""
     escaped_payload = json.dumps(text)
-    js_code = f"""
+    html_code = f"""
+    <style>
+        * {{
+            box-sizing: border-box;
+            outline: none !important;
+        }}
+        html, body {{
+            margin: 0;
+            padding: 0;
+            width: 36px;
+            height: 36px;
+            overflow: hidden;
+            background: transparent !important;
+        }}
+        .custom-icon-btn {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background-color: rgba(128, 128, 128, 0.08);
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            font-size: 0.98rem;
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+            outline: none;
+            box-shadow: none;
+            transition: all 0.15s ease-in-out;
+            user-select: none;
+        }}
+        .custom-icon-btn:hover {{
+            border-color: rgba(128, 128, 128, 0.55);
+            background-color: rgba(128, 128, 128, 0.16);
+        }}
+        .custom-icon-btn:active {{
+            transform: scale(0.95);
+        }}
+    </style>
+
+    <button id="copy-btn-{key_id}" class="custom-icon-btn" onclick="handleCopy()" title="답변 복사">
+        <span id="icon-{key_id}">📋</span>
+    </button>
+
     <script>
-        (function() {{
+        function handleCopy() {{
             const rawText = {escaped_payload};
             if (navigator.clipboard && window.isSecureContext) {{
-                navigator.clipboard.writeText(rawText);
+                navigator.clipboard.writeText(rawText)
+                    .then(() => showSuccess())
+                    .catch(() => fallbackCopy(rawText));
             }} else {{
-                const textArea = document.createElement("textarea");
-                textArea.value = rawText;
-                textArea.style.position = "fixed";
-                textArea.style.left = "-9999px";
-                document.body.appendChild(textArea);
-                textArea.focus();
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
+                fallbackCopy(rawText);
             }}
-        }})();
+        }}
+
+        function fallbackCopy(text) {{
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            textArea.style.position = "fixed";
+            textArea.style.top = "0";
+            textArea.style.left = "0";
+            textArea.style.opacity = "0";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {{
+                const success = document.execCommand('copy');
+                if (success) showSuccess();
+            }} catch (err) {{
+                console.error("Copy failed: ", err);
+            }}
+            document.body.removeChild(textArea);
+        }}
+
+        function showSuccess() {{
+            const icon = document.getElementById("icon-{key_id}");
+            const btn = document.getElementById("copy-btn-{key_id}");
+            icon.innerText = "✅";
+            btn.style.borderColor = "#4CAF50";
+            setTimeout(() => {{
+                icon.innerText = "📋";
+                btn.style.borderColor = "rgba(128, 128, 128, 0.25)";
+            }}, 1500);
+        }}
     </script>
     """
-    components.html(js_code, height=0, width=0)
+    components.html(html_code, height=36, width=36)
 
 
 # --- 4. 세션 상태 관리 ---
@@ -278,31 +383,28 @@ def select_chat(session_id: str):
 
 
 # --- 5. 출처 및 액션 툴바 렌더러 ---
-def render_sources(sources_list: list):
-    """순수 HTML 단일 카드 박스로 판례 원문 렌더링 (마크다운 파서 간섭 차단)"""
+def render_sources(sources_list: List[Dict[str, Any]]):
+    """판례별 개별 토글(Expander)로 원문 렌더링"""
     if not sources_list:
         return
 
-    with st.expander("📑 참고 법령 및 판례 원문 (클릭하여 펼치기)", expanded=False):
-        for idx, doc in enumerate(sources_list):
-            title = doc.get("title", "법률 문서")
-            court = doc.get("court_name", "")
-            date = doc.get("issue_date", "")
-            case_no = doc.get("case_number", "")
-            full_text = doc.get("full_text", "").strip()
+    st.markdown("##### 📑 참고 법령 및 판례")
 
-            # 날짜 다중 공백 정돈
-            full_text = re.sub(r"(\d+)\.\s{2,}", r"\1. ", full_text)
+    for idx, doc in enumerate(sources_list):
+        title = doc.get("title", "법률 문서")
+        court = doc.get("court_name", "")
+        date = doc.get("issue_date", "")
+        case_no = doc.get("case_number", "")
+        full_text = doc.get("full_text", "").strip()
 
-            meta_info = f"({court} {date})" if (court or date) else ""
-            header_title = f"{idx + 1}. {title} {f'[{case_no}]' if case_no else ''} {meta_info}".strip()
+        full_text = re.sub(r"(\d+)\.\s{2,}", r"\1. ", full_text)
+        meta_info = f"({court} {date})" if (court or date) else ""
+        header_title = f"{idx + 1}. {title} {f'[{case_no}]' if case_no else ''} {meta_info}".strip()
+        sanitized_text = html.escape(full_text)
 
-            sanitized_text = html.escape(full_text)
+        with st.expander(f"⚖️ {header_title}", expanded=False):
             card_html = f"""
-            <div class="legal-callout-card">
-                <div class="legal-card-header">
-                    <span>⚖️</span> {html.escape(header_title)}
-                </div>
+            <div class="legal-callout-card" style="margin-top: 0.2rem; border-left: 3px solid #4a90e2;">
                 <div>{sanitized_text}</div>
             </div>
             """
@@ -310,10 +412,12 @@ def render_sources(sources_list: list):
 
 
 def render_action_bar(content: str, msg_idx: int, user_query_for_retry: str = ""):
+    """피드백, 답변 재생성 및 복사 툴바"""
     if not content or content.startswith("⚠️"):
         return
 
-    col1, col2, col3, col4, _ = st.columns([0.05, 0.05, 0.05, 0.05, 0.80])
+    # 4개 버튼을 좌측에 균등 배치
+    col1, col2, col3, col4, _ = st.columns([0.045, 0.045, 0.045, 0.045, 0.82], gap="small")
 
     with col1:
         if st.button("👍", key=f"btn_like_{msg_idx}", help="도움이 되었어요"):
@@ -333,9 +437,7 @@ def render_action_bar(content: str, msg_idx: int, user_query_for_retry: str = ""
                 st.rerun()
 
     with col4:
-        if st.button("📋", key=f"btn_copy_{msg_idx}", help="답변 복사"):
-            copy_to_clipboard_js(content)
-            st.toast("답변이 클립보드에 복사되었습니다!", icon="📋")
+        render_copy_button(content, f"msg_{msg_idx}")
 
 
 # --- 6. 사이드바 구성 ---
@@ -372,14 +474,13 @@ with st.sidebar:
     st.caption(f"Session ID: `{st.session_state.current_session_id[:8]}...`")
 
 
-# --- 7. 메인 화면 ---
+# --- 7. 메인 화면 및 기존 대화 렌더링 ---
 st.title("⚖️ 재산범죄 전문 법률 AI 어시스턴트")
 st.caption("사기·횡령·배임 등 재산범죄 전문 판례 및 형법 데이터를 기반으로 실시간 법률 자문을 지원합니다.")
 
 curr_session = st.session_state.conversations[st.session_state.current_session_id]
 messages = curr_session["messages"]
 
-# 기존 대화 렌더링
 for idx, msg in enumerate(messages):
     with st.chat_message(msg["role"]):
         st.markdown(sanitize_legal_markdown(msg["content"]))
@@ -392,11 +493,11 @@ for idx, msg in enumerate(messages):
             render_action_bar(msg["content"], idx, prev_user_q)
 
 
-# --- 8. 질의 입력 및 백엔드 스트리밍 통신 ---
+# --- 8. 질의 입력 및 백엔드 SSE 스트리밍 ---
 input_query = st.chat_input("사건 내용이나 법률 질문을 입력해 주세요.")
 
-active_query = None
-is_regenerating = False
+active_query: Optional[str] = None
+is_regenerating: bool = False
 
 if st.session_state.retry_query:
     active_query = st.session_state.retry_query
@@ -421,7 +522,7 @@ if active_query:
         action_placeholder = st.empty()
 
         full_response = ""
-        sources_list = []
+        sources_list: List[Dict[str, Any]] = []
         is_first_token = True
 
         status_msg = "🔄 답변을 재구성하고 있습니다..." if is_regenerating else "🔍 관련 판례 및 형법 법령을 분석 중입니다..."
@@ -433,10 +534,14 @@ if active_query:
                     "conversation_id": st.session_state.current_session_id
                 }
 
-                with httpx.Client(timeout=90.0) as client:
+                with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
                     with client.stream("POST", BACKEND_URL, json=payload, headers=headers) as response:
                         if response.status_code != 200:
-                            raise httpx.HTTPStatusError(f"HTTP {response.status_code}", request=response.request, response=response)
+                            raise httpx.HTTPStatusError(
+                                f"HTTP {response.status_code}",
+                                request=response.request,
+                                response=response
+                            )
 
                         for line in response.iter_lines():
                             if line.startswith("data: "):
@@ -469,7 +574,7 @@ if active_query:
                 status_placeholder.empty()
                 full_response = f"⚠️ **통신 오류 발생:** {str(e)}"
 
-        # 스트리밍 완료 후 최종 렌더링
+        # 스트리밍 완료 후 커서 제거 및 최종 렌더링
         status_placeholder.empty()
         message_placeholder.markdown(sanitize_legal_markdown(full_response))
 
